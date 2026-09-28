@@ -20,7 +20,7 @@ from regspec.validador import validar
 from regspec.verificador import verificar
 
 RAIZ = Path(__file__).resolve().parents[1]
-IDS = ["m1_retenciones", "m2_cuentas", "m3_operaciones_xml"]
+IDS = ["m1_retenciones", "m2_cuentas", "m3_operaciones_xml", "m4_seguros_pdf", "m5_beneficiarios_inconsistente"]
 
 
 def gold(i) -> dict:
@@ -28,7 +28,8 @@ def gold(i) -> dict:
 
 
 def manual(i) -> str:
-    return (RAIZ / "manuales" / f"{i}.md").read_text(encoding="utf-8")
+    p = RAIZ / "manuales" / f"{i}.md"
+    return (p if p.exists() else p.with_suffix(".txt")).read_text(encoding="utf-8")
 
 
 def codigos(res):
@@ -401,3 +402,20 @@ def test_cruce_tolerancia_y_duplicados():
     assert r.resumen["en ambos iguales"] == 1  # "1" y "001" son la misma llave; 10.00 vs 10.004 dentro de la tolerancia
     assert r.resumen["llaves duplicadas en A"] == 1
     assert r.resumen["en ambos con diferencias"] == 1
+
+
+
+def test_manual_inconsistente_lo_detecta_el_verificador():
+    """m5 tiene una errata: el campo nombre va de 13 a 42 (30 posiciones) pero la columna Long. dice 28."""
+    d = gold("m5_beneficiarios_inconsistente")
+    d["tipos_registro"][1]["campos"][2]["longitud"] = 28  # copiar el manual al pie de la letra
+    assert "INCONSISTENCIA_FIN" in codigos(verificar(d, manual("m5_beneficiarios_inconsistente")))
+
+
+def test_regla_de_registro_unico_con_valor_es_satisfacible():
+    """Un modelo escribió los totales de control como reglas de ámbito registro sobre el cierre usando valor():
+    es equivalente y no debe informarse como insatisfacible."""
+    d = gold("m1_retenciones")
+    for r in d["reglas"][:2]:
+        r["ambito"], r["tipo_registro"] = "registro", "09"
+    assert verificar(d, manual("m1_retenciones")).valida

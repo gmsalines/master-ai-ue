@@ -46,7 +46,12 @@ with st.sidebar:
         else:
             modelo = st.text_input("Modelo", defecto)
         env = PRESETS.get(opcion, (None, "ANTHROPIC_API_KEY", None))[1] if opcion != "anthropic" else "ANTHROPIC_API_KEY"
-        clave = st.text_input("API key", value=os.environ.get(env or "", ""), type="password",
+        def _secreto(nombre):
+            try:
+                return st.secrets.get(nombre, "")  # Streamlit Cloud: Settings -> Secrets
+            except Exception:  # noqa: BLE001 (sin archivo de secrets en local)
+                return ""
+        clave = st.text_input("API key", value=os.environ.get(env or "", "") or _secreto(env or ""), type="password",
                               help="No se guarda; solo se usa en esta sesión.") if env else None
         if opcion == "anthropic":
             proveedor = Anthropic(modelo=modelo, api_key=clave)
@@ -72,7 +77,7 @@ t1, t2, t3, t4, t5 = st.tabs(["1 · Compilar manual", "2 · Especificación", "3
 
 # ---------------------------------------------------------------- 1. compilar
 with t1:
-    ejemplos = {p.stem: p for p in sorted((RAIZ / "manuales").glob("*.md"))}
+    ejemplos = {p.stem: p for p in sorted([*(RAIZ / "manuales").glob("*.md"), *(RAIZ / "manuales").glob("*.txt")])}
     c1, c2 = st.columns([1, 1])
     with c1:
         elegido = st.selectbox("Manual de ejemplo", ["(subir uno propio)"] + list(ejemplos))

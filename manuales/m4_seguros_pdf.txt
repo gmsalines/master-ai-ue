@@ -1,0 +1,116 @@
+SUPERINTENDENCIA DE ENTIDADES ASEGURADORAS (SEA)
+Documento ficticio con fines académicos
+
+INSTRUCTIVO TÉCNICO N.º 14
+RÉGIMEN INFORMATIVO TRIMESTRAL DE PÓLIZAS Y SINIESTROS
+Versión 2.0
+
+Documento ficticio con fines académicos — Página 1 de 6
+
+
+HISTORIAL DE VERSIONES
+
+Versión   Fecha        Cambios
+1.0       15/03/2023   Versión inicial. Registros de 110 posiciones.
+1.1       02/10/2023   Se agrega el registro de siniestros.
+2.0       01/07/2025   Registros de 100 posiciones. Se elimina el campo Código de productor.
+
+Nota sobre la versión 1.0: en esa versión el registro de pólizas incluía un campo Código de productor en las posiciones 65 a 74. Ese campo fue eliminado y NO debe informarse en la versión 2.0.
+
+
+1. INTRODUCCIÓN
+
+La Superintendencia, en ejercicio de sus facultades de supervisión, requiere a las entidades aseguradoras la remisión trimestral de la información de las pólizas vigentes durante el período y de los siniestros denunciados en él. El presente instructivo establece el diseño del archivo, los criterios de aceptación y el procedimiento de remisión. Las entidades que no remitan la información en tiempo y forma quedarán sujetas al régimen sancionatorio vigente.
+
+Documento ficticio con fines académicos — Página 2 de 6
+
+
+2. CARACTERÍSTICAS DEL ARCHIVO
+
+El archivo se remitirá en formato de texto, con registros de longitud fija de 100 caracteres, separados por retorno de carro y salto de línea (CR+LF). Los campos numéricos se completan con ceros a la izquierda y los alfanuméricos con espacios a la derecha. Los importes se expresan con dos decimales implícitos, sin separadores.
+
+El archivo se compone de los siguientes tipos de registro, identificados por los dos primeros caracteres de cada línea:
+
+   HD   Encabezado. Un único registro, que debe ser el primero del archivo.
+   PL   Póliza. Un registro por cada póliza vigente en el trimestre. Debe haber al menos uno.
+   SI   Siniestro. Un registro por cada siniestro denunciado. Puede no haber ninguno.
+   TR   Totales. Un único registro, que debe ser el último del archivo.
+
+
+3. DISEÑO DE REGISTROS
+
+3.1 Registro HD - Encabezado
+
+Campo                          Posición   Longitud   Tipo   Observaciones
+Tipo de registro               1          2          A      Valor fijo "HD"
+Código de aseguradora          3          5          N      Asignado por la Superintendencia
+Período                        8          6          N      Formato AAAAMM (último mes del trimestre)
+Fecha de envío                 14         8          N      Formato AAAAMMDD
+Relleno                        22         79         A      Espacios
+
+Documento ficticio con fines académicos — Página 3 de 6
+
+3.2 Registro PL - Póliza
+
+Campo                          Posición   Longitud   Tipo   Observaciones
+Tipo de registro               1          2          A      Valor fijo "PL"
+Número de póliza               3          14         A
+Ramo                           17         2          N      Según tabla de ramos del Anexo I
+Fecha de inicio de vigencia    19         8          N      Formato AAAAMMDD
+Fecha de fin de vigencia       27         8          N      Formato AAAAMMDD
+Suma asegurada                 35         15         N      Dos decimales implícitos
+Prima emitida                  50         12         N      Dos decimales implícitos
+Moneda                         62         3          A      MNL (moneda nacional) o USD
+Relleno                        65         36         A      Espacios
+
+3.3 Registro SI - Siniestro
+
+Campo                          Posición   Longitud   Tipo   Observaciones
+Tipo de registro               1          2          A      Valor fijo "SI"
+Número de póliza               3          14         A      Póliza afectada
+Número de siniestro            17         10         A
+Fecha del siniestro            27         8          N      Formato AAAAMMDD
+Monto reclamado                35         15         N      Dos decimales implícitos
+Monto pagado                   50         15         N      Dos decimales implícitos
+Estado                         65         1          A      A = abierto, C = cerrado, R = rechazado
+Relleno                        66         35         A      Espacios
+
+Documento ficticio con fines académicos — Página 4 de 6
+
+3.4 Registro TR - Totales
+
+Campo                          Posición   Longitud   Tipo   Observaciones
+Tipo de registro               1          2          A      Valor fijo "TR"
+Cantidad de pólizas            3          7          N
+Cantidad de siniestros         10         7          N
+Total de primas                17         17         N      Dos decimales implícitos
+Total pagado                   34         17         N      Dos decimales implícitos
+Relleno                        51         50         A      Espacios
+
+
+4. CRITERIOS DE ACEPTACIÓN
+
+El sistema de recepción aplicará los controles que se describen a continuación. Un archivo que no supere alguno de ellos será rechazado en su totalidad.
+
+Respecto de las pólizas: la fecha de fin de vigencia debe ser posterior a la fecha de inicio de vigencia; la prima emitida debe ser mayor que cero y en ningún caso podrá superar la suma asegurada.
+
+Documento ficticio con fines académicos — Página 5 de 6
+
+Respecto de los siniestros: cada siniestro debe corresponder a una póliza informada en un registro PL del mismo archivo. El monto pagado no puede ser mayor que el monto reclamado, y los siniestros en estado rechazado deben informar un monto pagado igual a cero.
+
+Respecto de los totales: la cantidad de pólizas y la cantidad de siniestros del registro TR deben coincidir con la cantidad de registros PL y SI, respectivamente. El total de primas debe ser igual a la suma de las primas emitidas de todas las pólizas, y el total pagado igual a la suma de los montos pagados de todos los siniestros.
+
+
+5. PROCEDIMIENTO DE REMISIÓN
+
+El archivo se remitirá a través del portal de la Superintendencia dentro de los quince días corridos posteriores al cierre de cada trimestre. El nombre del archivo tendrá la forma SEA_TRIM_CCCCC_AAAAMM.TXT, donde CCCCC es el código de aseguradora.
+
+
+ANEXO I - TABLA DE RAMOS
+
+Código   Ramo
+10       Automotores
+20       Incendio
+30       Vida
+
+Documento ficticio con fines académicos — Página 6 de 6

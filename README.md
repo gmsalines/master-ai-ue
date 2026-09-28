@@ -113,6 +113,12 @@ Medición con `gpt-oss-20b` en Groq (tokens totales por extracción):
 
 Proveedores soportados: `groq`, `openai`, `openrouter`, `ollama` (local, sin clave) y `anthropic`. Todos pasan por la misma interfaz, así que cambiar de modelo no toca el extractor. Esto mitiga la dependencia de un proveedor externo.
 
+## Publicar la demo (Streamlit Cloud, gratis)
+
+1. Entrá a share.streamlit.io con tu cuenta de GitHub y elegí **New app**: repositorio `gmsalines/master-ai-ue`, rama `main`, archivo `app.py`.
+2. En **Advanced settings → Secrets**, pegá `GROQ_API_KEY = "gsk_..."` (ver `.streamlit/secrets.toml.ejemplo`).
+3. **Deploy.** La app toma la clave de los *Secrets*: quien la use no necesita cargarla.
+
 ## Corpus de evaluación
 
 | Manual | Formato | Qué lo hace difícil |
@@ -120,6 +126,8 @@ Proveedores soportados: `groq`, `openai`, `openrouter`, `ollama` (local, sin cla
 | `m1_retenciones` | TXT 80 pos., CRLF | Tablas limpias con Desde/Hasta/Long. Decimales implícitos, códigos en una tabla aparte, 4 reglas de control. |
 | `m2_cuentas` | TXT 120 pos., LF | Sin columna de longitud: hay que deducirla de la notación `X(n)`, `9(n)V99`. Dominios y obligatoriedad en notas al pie, 12 reglas en prosa (sumas por cuenta, integridad referencial, condicionales, comparación con la cabecera). |
 | `m3_operaciones_xml` | XML | Todo en prosa, sin tablas. Patrones (tres letras mayúsculas), campos opcionales, 6 reglas. |
+| `m4_seguros_pdf` | TXT 100 pos., CRLF | Texto plano como el que sale de un PDF: tablas alineadas con espacios, sin separadores, encabezados y pies de página repetidos, historial de versiones y un **campo obsoleto** que no debe informarse (trampa de alucinación). 10 reglas en prosa. |
+| `m5_beneficiarios_inconsistente` | TXT 60 pos., LF | El manual tiene una **errata**: un campo va de la posición 13 a la 42 (30 posiciones) y la columna de longitud dice 28. Una especificación que copia el manual al pie de la letra no es coherente, y el verificador debe detectarlo. |
 
 Los tres manuales son **ficticios**: no reproducen ningún organismo real.
 

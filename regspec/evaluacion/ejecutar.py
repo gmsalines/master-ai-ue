@@ -47,7 +47,7 @@ METRICAS_TABLA = ["spec_valida", "campos_f1", "campos_exactos", "atributos_exact
 
 def cargar_casos(dir_manuales: Path = RAIZ / "manuales", dir_gold: Path = RAIZ / "gold") -> list[dict]:
     casos = []
-    for m in sorted(dir_manuales.glob("*.md")):
+    for m in sorted([*dir_manuales.glob("*.md"), *dir_manuales.glob("*.txt")]):
         g = dir_gold / (m.stem + ".json")
         if g.exists():
             casos.append({"id": m.stem, "manual": m.read_text(encoding="utf-8"),
@@ -75,10 +75,15 @@ def ejecutar(condiciones: list[str], proveedor: Optional[Proveedor] = None, repe
     salida = salida or RAIZ / "resultados" / time.strftime("%Y%m%d_%H%M%S")
     (salida / "specs").mkdir(parents=True, exist_ok=True)
     filas = []
+    agotado = False
     for caso in casos:
+        if agotado:
+            break
         bateria = construir_bateria(caso["gold"])
         for cond in condiciones:
             reps = 1 if cond in ("referencia", "base_sin_ia") else repeticiones
+            if agotado:
+                break
             for rep in range(reps):
                 t0 = time.time()
                 traza: dict = {}
@@ -89,10 +94,15 @@ def ejecutar(condiciones: list[str], proveedor: Optional[Proveedor] = None, repe
                 else:
                     if proveedor is None:
                         raise ValueError(f"la condición {cond} requiere un proveedor de LLM")
-                    prov = ProveedorConCache(proveedor, usar=usar_cache, sal=f"{cond}#{rep}")
+                    # la caché se comparte entre condiciones: con temperatura 0, el mismo pedido da la misma respuesta,
+                    # así que el borrador inicial se paga una sola vez y las ablaciones solo pagan sus correcciones
+                    prov = ProveedorConCache(proveedor, usar=usar_cache, sal=f"rep{rep}")
                     r = extraer(caso["manual"], prov, CONDICIONES_LLM[cond])
                     d = r.spec_dict
                     traza = r.traza()
+                    if r.error and "límite diario" in r.error:
+                        log(f"cupo diario agotado en {caso['id']} / {cond}: se guardan los resultados parciales")
+                        agotado = True
                 fila = {"manual": caso["id"], "condicion": cond, "repeticion": rep,
                         "modelo": getattr(proveedor, "modelo", "") if cond.startswith("llm") else "",
                         "iteraciones": len(traza.get("iteraciones", [])) or (0 if cond in ("referencia", "base_sin_ia") else None),

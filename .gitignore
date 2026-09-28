@@ -5,3 +5,4 @@ resultados/
 *.pyc
 .env
 .cache_llm/
+.streamlit/secrets.toml

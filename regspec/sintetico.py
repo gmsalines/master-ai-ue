@@ -139,10 +139,14 @@ def _lado_asignable(nodo: ast.AST, tr: Optional[TipoRegistro]):
     """Si la regla es `campo == expr` (o simétrica) devuelve (campo, expr_ast)."""
     if isinstance(nodo, ast.Compare) and len(nodo.ops) == 1 and isinstance(nodo.ops[0], ast.Eq):
         izq, der = nodo.left, nodo.comparators[0]
-        if isinstance(izq, ast.Name):
-            return izq.id, der
-        if isinstance(der, ast.Name):
-            return der.id, izq
+        for a, b in ((izq, der), (der, izq)):
+            if isinstance(a, ast.Name):
+                return a.id, b
+            # valor("T", "campo") dentro de una regla del propio registro T equivale al campo suelto
+            if (tr is not None and isinstance(a, ast.Call) and getattr(a.func, "id", "") == "valor" and len(a.args) == 2
+                    and isinstance(a.args[0], ast.Constant) and a.args[0].value == tr.codigo
+                    and isinstance(a.args[1], ast.Constant)):
+                return a.args[1].value, b
     return None
 
 
@@ -175,7 +179,7 @@ def generar_registros(spec: Especificacion, semilla: int = 0, max_pasadas: int =
     for regla in spec.reglas:
         if regla.ambito == "registro":
             try:
-                a = _lado_asignable(parsear(regla.expresion), None)
+                a = _lado_asignable(parsear(regla.expresion), spec.tipo(regla.tipo_registro or ""))
             except ErrorExpresion:
                 a = None
             if a:

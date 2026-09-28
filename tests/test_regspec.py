@@ -438,3 +438,42 @@ def test_deteccion_de_formato_y_llave_ia_validada():
     prov = Guionado([json.dumps({"llave_a": ["inventada"], "llave_b": ["comprobante"]})])
     with pytest.raises(ValueError):
         sugerir_llave_ia(A, B, prov)
+
+
+# ------------------------------------------------------------------ grupos de archivos (motor N-way)
+
+
+def test_grupos_base_referencia_transformacion_exclusion_tolerancia():
+    import pandas as pd
+    from regspec.grupos import ArchivoGrupo, Filtro, Grupo, cruzar_grupos
+    rd = lambda n: pd.read_csv(RAIZ / "ejemplos/grupos" / n, dtype=str)  # noqa: E731
+    g1 = Grupo("Sistema", [
+        ArchivoGrupo("retenciones", rd("g1_retenciones_sistema.csv"), ["ID_FISCAL"], "solo_numeros",
+                     [Filtro("MONTO_RETENIDO", "<=", "0")]),
+        ArchivoGrupo("padron", rd("g1_padron_referencia.csv"), ["Identificador"], "solo_numeros", traer=["Categoria"]),
+    ], modo="base_referencia", importes=["MONTO_RETENIDO"])
+    g2 = Grupo("Agente", [ArchivoGrupo("reporte", rd("g2_reporte_agente.csv"), ["Id Contribuyente"], "solo_numeros")])
+    r = cruzar_grupos([g1, g2], [("MONTO_RETENIDO", "Monto Retenido")])
+    assert r.estadisticas["Sistema"]["excluidas por filtros"] == 1
+    assert r.estadisticas["Sistema"]["encontradas en padron"].startswith("19 de 19")
+    assert r.resumen["en todos los grupos"] == 9 and r.resumen["en todos, con diferencias"] == 1
+    assert r.resumen["solo en Sistema"] == 1 and r.resumen["solo en Agente"] == 1
+    assert "Categoria" in r.detalles["Sistema"].columns
+    assert len(r.a_excel()) > 3000
+    # sin transformación, los ids con guiones no coinciden: 0 llaves en común
+    g2e = Grupo("Agente", [ArchivoGrupo("reporte", rd("g2_reporte_agente.csv"), ["Id Contribuyente"], "exacta")])
+    g1e = Grupo("Sistema", [ArchivoGrupo("ret", rd("g1_retenciones_sistema.csv"), ["ID_FISCAL"], "exacta")])
+    assert cruzar_grupos([g1e, g2e]).resumen["en todos los grupos"] == 0
+
+
+def test_tres_grupos_y_suma_por_llave():
+    import pandas as pd
+    from regspec.grupos import ArchivoGrupo, Grupo, cruzar_grupos
+    a = pd.DataFrame({"id": ["1", "1", "2"], "m": ["10", "5", "7"]})
+    b = pd.DataFrame({"ref": ["1", "2", "3"], "imp": ["15", "7", "1"]})
+    c = pd.DataFrame({"k": ["01", "02"], "v": ["15", "8"]})
+    r = cruzar_grupos([Grupo("A", [ArchivoGrupo("a", a, ["id"])], "sumar_por_llave"),
+                       Grupo("B", [ArchivoGrupo("b", b, ["ref"])]),
+                       Grupo("C", [ArchivoGrupo("c", c, ["k"], "sin_ceros")])], [("m", "imp", "v")])
+    assert r.resumen["en todos los grupos"] == 2 and r.resumen["en todos, con diferencias"] == 1
+    assert r.resumen["solo en B"] == 1

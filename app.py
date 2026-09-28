@@ -8,6 +8,9 @@ import difflib
 import io
 import json
 import os
+import re
+from decimal import Decimal
+from typing import Optional
 from pathlib import Path
 
 import pandas as pd
@@ -260,7 +263,7 @@ with tc:
     if ss.spec is not None:
         biblioteca["(compilada en esta sesión)"] = ss.spec
 
-    st.subheader("1 · Subí los archivos")
+    st.subheader("1 · Armá los grupos de archivos")
 
     def leer_uno(f, lado: str, i: int):
         if True:
@@ -318,92 +321,144 @@ with tc:
             st.caption(f"{len(df)} registros")
             return df
 
-    def cargar(lado: str, col):
-        """Un grupo = uno o varios archivos del mismo tipo que se unen antes de cruzar (p. ej. varios meses)."""
-        with col:
-            st.markdown(f"**Grupo {lado}**")
-            archivos = st.file_uploader(f"Archivos del grupo {lado} (podés subir varios)",
-                                        type=["csv", "xlsx", "xls", "txt", "xml", "dat"],
-                                        accept_multiple_files=True, key=f"cruce_{lado}")
+    from regspec.grupos import MODOS, OPERADORES, TRANSFORMACIONES, ArchivoGrupo, Filtro, Grupo, cruzar_grupos, transformar
+
+    def transformacion_sugerida(serie: pd.Series) -> str:
+        v = [str(x) for x in serie.dropna().astype(str).head(200) if str(x).strip()]
+        if v and sum(1 for x in v if re.sub(r"\D", "", x) and not x.isdigit() and len(re.sub(r"\D", "", x)) >= len(x) * 0.7) >= len(v) * 0.3:
+            return "solo_numeros"
+        return "exacta"
+
+    def columna_llave_sugerida(ref: Optional[tuple], df: pd.DataFrame) -> list[str]:
+        """Llave sugerida para un archivo: la columna cuyos valores coinciden con la llave de referencia (sin IA)."""
+        cols = [c for c in df.columns if not c.startswith("_")]
+        if ref is not None:
+            rdf, rcol, rtr = ref
+            refv = {transformar(x, rtr) for x in rdf[rcol].dropna().head(2000)}
+            mejor, puntaje = None, 0.0
+            for c in cols:
+                for tr in ("exacta", "solo_numeros", "sin_ceros"):
+                    vals = {transformar(x, tr) for x in df[c].dropna().head(2000)} - {""}
+                    if vals:
+                        p = len(vals & refv) / len(vals)
+                        if p > puntaje:
+                            mejor, puntaje = c, p
+            if mejor and puntaje >= 0.3:
+                return [mejor]
+        # sin referencia: la columna más "identificadora" (valores casi únicos y con nombre típico)
+        def score(c):
+            s = df[c].dropna().astype(str)
+            unic = s.nunique() / max(1, len(s))
+            tokens = [t for t in re.split(r"[^a-z0-9]+", c.lower()) if t]
+            ids = ("id", "nro", "numero", "num", "codigo", "cod", "clave", "llave", "doc", "documento", "comprobante",
+                   "identificador", "identification", "contribuyente", "cuenta", "poliza", "referencia", "ref")
+            nombre = 1.0 if any(t in ids or t.startswith(("ident", "docu", "compro")) for t in tokens) else 0.0
+            if any(t in ("monto", "importe", "total", "fecha", "saldo", "valor") for t in tokens):
+                nombre -= 1.0
+            return unic + nombre
+        return [max(cols, key=score)] if cols else []
+
+    ss.setdefault("n_grupos", 2)
+    st.caption("Cada **grupo** reúne uno o varios archivos. En cada archivo definís su **llave** (y cómo normalizarla); "
+               "el cruce se hace sobre esa llave entre todos los grupos.")
+    grupos_ui = []
+    referencia = None  # (df, col, transformación) de la primera llave definida: guía las sugerencias del resto
+    for gi in range(ss.n_grupos):
+        with st.container(border=True):
+            c_nom, c_modo = st.columns([1, 2])
+            nombre_g = c_nom.text_input("Nombre del grupo", f"Grupo {gi + 1}", key=f"gnom_{gi}")
+            archivos = st.file_uploader(f"Archivos de «{nombre_g}» (uno o varios)", type=["csv", "xlsx", "xls", "txt", "xml", "dat"],
+                                        accept_multiple_files=True, key=f"gfiles_{gi}")
+            modo_g = c_modo.selectbox("Cómo combinar los archivos del grupo", list(MODOS), format_func=MODOS.get,
+                                      key=f"gmodo_{gi}", disabled=not archivos or len(archivos) < 2)
             if not archivos:
-                return None
-            partes = []
-            for i, f in enumerate(archivos):
-                with st.container(border=True):
-                    st.caption(f"📄 {f.name}")
-                    df = leer_uno(f, lado, i)
-                if df is None:
-                    return None  # falta aprender un formato o hubo un error de lectura
-                df = df.copy()
-                df.insert(0, "_archivo", f.name)
-                partes.append(df)
-            columnas = [set(c for c in p.columns if not c.startswith("_")) for p in partes]
-            if len(partes) > 1 and any(c != columnas[0] for c in columnas[1:]):
-                st.warning("Los archivos del grupo no tienen las mismas columnas: se unen igual y las faltantes quedan vacías.")
-            total = pd.concat(partes, ignore_index=True)
-            st.caption(f"Grupo {lado}: {len(archivos)} archivo(s), {len(total)} registros")
-            st.dataframe(total.head(5), hide_index=True, width="stretch")
-            return total
+                grupos_ui.append(None)
+                continue
+            arch_objs, completo = [], True
+            for fi, f in enumerate(archivos):
+                with st.expander(f"📄 {f.name}", expanded=True):
+                    df = leer_uno(f, f"g{gi}", fi)
+                    if df is None:
+                        completo = False
+                        continue
+                    cols = [c for c in df.columns if not c.startswith("_")]
+                    sug = columna_llave_sugerida(referencia, df)
+                    c1, c2 = st.columns([2, 1])
+                    llave = c1.multiselect("Llave (una o varias columnas)", cols, default=sug, key=f"llave_{gi}_{fi}")
+                    tr_def = transformacion_sugerida(df[llave[0]]) if llave else "exacta"
+                    tr = c2.selectbox("Normalizar la llave", list(TRANSFORMACIONES), format_func=TRANSFORMACIONES.get,
+                                      index=list(TRANSFORMACIONES).index(tr_def), key=f"tr_{gi}_{fi}")
+                    if llave:
+                        st.caption("Ejemplos de llave: " + ", ".join(
+                            "|".join(transformar(v, tr) for v in fila) for fila in df[llave].head(3).itertuples(index=False)))
+                    filtros = []
+                    fc1, fc2, fc3 = st.columns(3)
+                    fcol = fc1.selectbox("Excluir filas donde…", ["(sin filtro)"] + cols, key=f"fcol_{gi}_{fi}")
+                    if fcol != "(sin filtro)":
+                        fop = fc2.selectbox("condición", OPERADORES, key=f"fop_{gi}_{fi}")
+                        fval = fc3.text_input("valor", key=f"fval_{gi}_{fi}") if fop not in ("vacío", "no vacío") else ""
+                        filtros.append(Filtro(fcol, fop, fval))
+                    traer = []
+                    if modo_g == "base_referencia" and fi > 0:
+                        traer = st.multiselect("Columnas a traer a la base", [c for c in cols if c not in llave], key=f"traer_{gi}_{fi}")
+                    if llave:
+                        arch_objs.append(ArchivoGrupo(f.name, df, llave, tr, filtros, traer))
+                        if referencia is None:
+                            referencia = (df, llave[0], tr)
+                    else:
+                        completo = False
+            if not completo or not arch_objs:
+                grupos_ui.append(None)
+                continue
+            cols_g = sorted({c for a in arch_objs for c in a.df.columns if not c.startswith("_")} |
+                            {c for a in arch_objs for c in a.traer})
+            grupos_ui.append((nombre_g, arch_objs, modo_g, cols_g))
+    b1, b2, _ = st.columns([1, 1, 3])
+    if b1.button("➕ Agregar grupo"):
+        ss.n_grupos += 1
+        st.rerun()
+    if ss.n_grupos > 2 and b2.button("➖ Quitar el último"):
+        ss.n_grupos -= 1
+        st.rerun()
 
-    ca, cb = st.columns(2)
-    A, B = cargar("A", ca), cargar("B", cb)
-
-    if A is not None and B is not None and len(A) and len(B):
-        st.subheader("2 · ¿Cómo los cruzo?")
-        clave_cache = "sug_" + "_".join(f.name for lado in "AB" for f in ss.get(f"cruce_{lado}") or []) + f"_{len(A)}_{len(B)}"
-        sugeridas = sugerir_llave(A, B)
-        sug = None
-        if llave_clara(sugeridas):
-            p0 = sugeridas[0]
-            sug = {"llave_a": [p0.col_a], "llave_b": [p0.col_b], "comparar": sugerir_comparaciones(A, B, [p0.col_a], [p0.col_b]),
-                   "motivo": p0.motivo, "origen": "automática (sin IA)"}
-        elif proveedor is not None:
-            if clave_cache not in ss:
-                try:
-                    with st.spinner("No encontré una llave clara; se la consulto a la IA…"):
-                        ss[clave_cache] = sugerir_llave_ia(A, B, ProveedorConCache(proveedor, usar=usar_cache))
-                except Exception as e:  # noqa: BLE001
-                    ss[clave_cache] = {"error": str(e)}
-            r_ia = ss[clave_cache]
-            if "error" in r_ia:
-                st.warning(f"La IA no pudo sugerir una llave: {r_ia['error']}")
-            else:
-                sug = {**r_ia, "origen": f"IA ({r_ia.get('tokens', 0)} tokens; coinciden {r_ia['solape']:.0%} de los valores)"}
-        if sug:
-            st.info(f"**Sugerencia {sug['origen']}:** cruzar por **{' + '.join(sug['llave_a'])}** (A) ↔ "
-                    f"**{' + '.join(sug['llave_b'])}** (B). {sug.get('motivo', '')}")
-        else:
-            st.warning("No encontré una llave clara: elegila vos.")
-        cols_a = [c for c in A.columns if not c.startswith("_")]
-        cols_b = [c for c in B.columns if not c.startswith("_")]
-        c1, c2, c3 = st.columns(3)
-        llave_a = c1.multiselect("Llave en A", cols_a, default=(sug or {}).get("llave_a", []), key=f"la_{clave_cache}")
-        llave_b = c2.multiselect("Llave en B", cols_b, default=(sug or {}).get("llave_b", []), key=f"lb_{clave_cache}")
-        tol = c3.number_input("Tolerancia en importes", value=0.01, min_value=0.0, step=0.01, format="%.2f")
-        comp_def = (sug or {}).get("comparar") or (sugerir_comparaciones(A, B, llave_a, llave_b) if llave_a and llave_b else [])
-        comp_txt = st.text_area("Columnas a comparar (una por línea: columna_A = columna_B)",
-                                "\n".join(f"{x} = {y}" for x, y in comp_def), height=110, key=f"cmp_{clave_cache}")
-        comparar = []
-        for linea in comp_txt.splitlines():
-            if "=" in linea:
-                x, y = [t.strip() for t in linea.split("=", 1)]
-                if x in A.columns and y in B.columns:
-                    comparar.append((x, y))
+    listos = [g for g in grupos_ui if g is not None]
+    if len(listos) >= 2 and len(listos) == len(grupos_ui):
+        st.subheader("2 · ¿Qué comparo en cada llave?")
+        st.caption("Elegí la columna de importe de cada grupo; se suman por llave y se comparan con la tolerancia.")
+        n_cmp = st.number_input("Cantidad de importes a comparar", 0, 5, 1, key="ncmp")
+        comparaciones = []
+        for k in range(int(n_cmp)):
+            cc = st.columns(len(listos))
+            fila = []
+            for j, (nom, _, _, cols_g) in enumerate(listos):
+                num = [c for c in cols_g if re.search(r"monto|importe|total|base|valor|saldo|retenid|prima|pagad", c, re.I)] or cols_g
+                fila.append(cc[j].selectbox(f"{nom}", cols_g, index=cols_g.index(num[min(k, len(num) - 1)]), key=f"cmp_{k}_{j}"))
+            comparaciones.append(tuple(fila))
+        tol = st.number_input("Tolerancia en importes", value=0.01, min_value=0.0, step=0.01, format="%.2f", key="tol_g")
 
         st.subheader("3 · Resultado")
-        if st.button("Cruzar", type="primary", disabled=not (llave_a and len(llave_a) == len(llave_b))):
-            r = cruzar(A, B, llave_a, llave_b, comparar, Decimal(str(tol)))
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Solo en A", r.resumen["solo en A"])
-            m2.metric("Solo en B", r.resumen["solo en B"])
-            m3.metric("Con diferencias", r.resumen["en ambos con diferencias"])
-            m4.metric("Iguales", r.resumen["en ambos iguales"])
-            if r.resumen["llaves duplicadas en A"] or r.resumen["llaves duplicadas en B"]:
-                st.warning(f"Llaves duplicadas: A={r.resumen['llaves duplicadas en A']}, B={r.resumen['llaves duplicadas en B']}")
-            for titulo, df in [("Diferencias", r.diferencias), ("Solo en A", r.solo_a), ("Solo en B", r.solo_b)]:
-                if len(df):
-                    st.markdown(f"**{titulo}**")
-                    st.dataframe(df, hide_index=True, width="stretch")
-            st.download_button("Descargar resultado (Excel)", r.a_excel(), "cruce.xlsx")
-    elif A is None or B is None:
-        st.caption("Para probar: grupo A = ejemplos/cruce_sistema.csv · grupo B = ejemplos/cruce_presentado.txt")
+        if st.button("Cruzar", type="primary"):
+            grupos = [Grupo(nom, arch, modo, []) for nom, arch, modo, _ in listos]
+            with st.spinner("Cruzando…"):
+                ss.res_grupos = cruzar_grupos(grupos, comparaciones, Decimal(str(tol)))
+        r = ss.get("res_grupos")
+        if r is not None:
+            nombres = [n for n, *_ in listos]
+            mets = st.columns(2 + len(nombres))
+            mets[0].metric("En todos los grupos", r.resumen["en todos los grupos"])
+            mets[1].metric("…con diferencias", r.resumen["en todos, con diferencias"])
+            for j, n in enumerate(nombres):
+                mets[2 + j].metric(f"Solo en {n}", r.resumen.get(f"solo en {n}", 0))
+            with st.expander("Estadísticas por grupo (filas, llaves, duplicados, exclusiones, lookups)"):
+                st.dataframe(pd.DataFrame(r.estadisticas).astype(str), width="stretch")
+            if len(r.diferencias):
+                st.markdown("**Diferencias de importe**")
+                st.dataframe(r.diferencias, hide_index=True, width="stretch")
+            estados = ["(todos)"] + sorted(r.matriz["estado"].unique())
+            ver = st.selectbox("Ver llaves", estados, key="ver_estado")
+            m = r.matriz if ver == "(todos)" else r.matriz[r.matriz["estado"] == ver]
+            st.dataframe(m.astype(str), hide_index=True, width="stretch")
+            st.download_button("Descargar resultado (Excel)", r.a_excel(), "conciliacion.xlsx")
+    elif any(g is None for g in grupos_ui):
+        st.caption("Para probar: Grupo 1 = ejemplos/grupos/g1_retenciones_sistema.csv + g1_padron_referencia.csv "
+                   "(modo base + referencia) · Grupo 2 = ejemplos/grupos/g2_reporte_agente.csv")

@@ -5,7 +5,7 @@ El sistema tiene dos flujos:
 | Flujo | Qué hace | ¿Usa IA? |
 |---|---|---|
 | **1 · Del manual a la especificación** | Lee el manual técnico (MD/TXT/PDF) y produce una especificación formal verificada del archivo regulatorio. | Sí, lo mínimo: primero intenta con código. Se hace una vez por manual. |
-| **2 · Cruce de archivos** | Cruza dos fuentes: CSV/Excel, o TXT/XML regulatorios leídos con la especificación del flujo 1. Informa qué está solo en A, solo en B, qué tiene diferencias (con tolerancia) y qué llaves están duplicadas, y exporta a Excel. | No. La llave se sugiere con una heurística. |
+| **2 · Conciliación por grupos** | Se arman **grupos de archivos** (CSV/Excel, o TXT/XML regulatorios leídos con la especificación del flujo 1). En cada archivo se define su **llave** (una o varias columnas) y cómo normalizarla (exacta, solo números, sin ceros a la izquierda, normalizada), más filtros de exclusión. Los archivos de un grupo se combinan concatenando, como base + referencia (lookup por llave) o sumando por llave. El cruce es N-way sobre la llave: presencia en cada grupo, diferencias de importe con tolerancia, duplicados, cobertura; exporta a Excel. | No. La llave se sugiere por código (solapamiento de valores y nombre de columna). |
 
 Además, con la especificación el sistema **valida** archivos antes del envío y **genera** el archivo a partir de un CSV, calculando solo los totales de control.
 
@@ -51,7 +51,8 @@ regspec/
   verificador.py    verificador formal en 7 etapas
   generador.py      generación del informe con autocompletado de totales de control
   base_sin_ia.py    línea base: parser convencional por reglas (sin IA); también primer paso del modo híbrido
-  cruce.py          cruce de archivos (flujo 2, sin IA)
+  cruce.py          lectura de archivos, detección de formato y cruce de 2 tablas
+  grupos.py         conciliación N-way por grupos de archivos con llaves (flujo 2, sin IA)
   llm/              proveedores desacoplados, prompts, extractor con bucle
   evaluacion/       batería de mutaciones, métricas, banco de evaluación
 manuales/           3 manuales ficticios de dificultad creciente
@@ -85,6 +86,9 @@ python -m regspec xsd       gold/m3_operaciones_xml.json -o esquema.xsd
 
 # 3. Cruce de archivos (sin IA)
 python -m regspec cruzar ejemplos/cruce_sistema.csv ejemplos/cruce_presentado.txt --spec-b gold/m1_retenciones.json -o cruce.xlsx
+
+# Conciliación por grupos: en la app, pestaña «Cruzar archivos». Ejemplo en ejemplos/grupos/
+# (Grupo 1 = g1_retenciones_sistema.csv + g1_padron_referencia.csv en modo base + referencia; Grupo 2 = g2_reporte_agente.csv)
 
 # 4. Demo interactiva
 streamlit run app.py

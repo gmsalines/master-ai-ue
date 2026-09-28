@@ -262,11 +262,9 @@ with tc:
 
     st.subheader("1 · Subí los archivos")
 
-    def cargar(lado: str, col):
-        with col:
-            f = st.file_uploader(f"Archivo {lado}", type=["csv", "xlsx", "xls", "txt", "xml", "dat"], key=f"cruce_{lado}")
-            if f is None:
-                return None
+    def leer_uno(f, lado: str, i: int):
+        if True:
+            k = f"{lado}{i}"
             det = detectar_especificacion(f.getvalue(), f.name, biblioteca)
             spec_sel, tipo = det.spec, det.tipo_registro
             if f.name.lower().endswith((".csv", ".xlsx", ".xls")):
@@ -275,16 +273,16 @@ with tc:
                 st.success(f"Formato reconocido: **{det.nombre_spec}** · {det.detalle}")
                 with st.expander("Cambiar formato o tipo de registro"):
                     nombres = list(biblioteca)
-                    n = st.selectbox("Especificación", nombres, index=nombres.index(det.nombre_spec), key=f"spec_{lado}")
+                    n = st.selectbox("Especificación", nombres, index=nombres.index(det.nombre_spec), key=f"spec_{k}")
                     spec_sel = biblioteca[n]
                     tipos = [t.codigo for t in spec_sel.tipos_registro]
                     tipo = st.selectbox("Tipo de registro a cruzar", tipos,
-                                        index=tipos.index(tipo) if tipo in tipos else 0, key=f"tipo_{lado}")
+                                        index=tipos.index(tipo) if tipo in tipos else 0, key=f"tipo_{k}")
             else:
                 st.warning("No reconozco el formato de este archivo. Subí su **manual técnico** y lo aprendo "
                            "(usa IA una sola vez; después queda guardado).")
-                man = st.file_uploader("Manual técnico (PDF, MD o TXT)", type=["pdf", "md", "txt"], key=f"manual_{lado}")
-                if man is not None and st.button("Aprender el formato", key=f"aprender_{lado}", type="primary"):
+                man = st.file_uploader("Manual técnico (PDF, MD o TXT)", type=["pdf", "md", "txt"], key=f"manual_{k}")
+                if man is not None and st.button("Aprender el formato", key=f"aprender_{k}", type="primary"):
                     if man.name.lower().endswith(".pdf"):
                         from pypdf import PdfReader
                         texto = "\n".join(p.extract_text() or "" for p in PdfReader(io.BytesIO(man.getvalue())).pages)
@@ -318,15 +316,41 @@ with tc:
                 st.error(f"No se pudo leer {f.name}: {e}")
                 return None
             st.caption(f"{len(df)} registros")
-            st.dataframe(df.head(5), hide_index=True, width="stretch")
             return df
+
+    def cargar(lado: str, col):
+        """Un grupo = uno o varios archivos del mismo tipo que se unen antes de cruzar (p. ej. varios meses)."""
+        with col:
+            st.markdown(f"**Grupo {lado}**")
+            archivos = st.file_uploader(f"Archivos del grupo {lado} (podés subir varios)",
+                                        type=["csv", "xlsx", "xls", "txt", "xml", "dat"],
+                                        accept_multiple_files=True, key=f"cruce_{lado}")
+            if not archivos:
+                return None
+            partes = []
+            for i, f in enumerate(archivos):
+                with st.container(border=True):
+                    st.caption(f"📄 {f.name}")
+                    df = leer_uno(f, lado, i)
+                if df is None:
+                    return None  # falta aprender un formato o hubo un error de lectura
+                df = df.copy()
+                df.insert(0, "_archivo", f.name)
+                partes.append(df)
+            columnas = [set(c for c in p.columns if not c.startswith("_")) for p in partes]
+            if len(partes) > 1 and any(c != columnas[0] for c in columnas[1:]):
+                st.warning("Los archivos del grupo no tienen las mismas columnas: se unen igual y las faltantes quedan vacías.")
+            total = pd.concat(partes, ignore_index=True)
+            st.caption(f"Grupo {lado}: {len(archivos)} archivo(s), {len(total)} registros")
+            st.dataframe(total.head(5), hide_index=True, width="stretch")
+            return total
 
     ca, cb = st.columns(2)
     A, B = cargar("A", ca), cargar("B", cb)
 
     if A is not None and B is not None and len(A) and len(B):
         st.subheader("2 · ¿Cómo los cruzo?")
-        clave_cache = f"sug_{st.session_state.get('cruce_A').name}_{st.session_state.get('cruce_B').name}_{len(A)}_{len(B)}"
+        clave_cache = "sug_" + "_".join(f.name for lado in "AB" for f in ss.get(f"cruce_{lado}") or []) + f"_{len(A)}_{len(B)}"
         sugeridas = sugerir_llave(A, B)
         sug = None
         if llave_clara(sugeridas):
@@ -382,4 +406,4 @@ with tc:
                     st.dataframe(df, hide_index=True, width="stretch")
             st.download_button("Descargar resultado (Excel)", r.a_excel(), "cruce.xlsx")
     elif A is None or B is None:
-        st.caption("Para probar: A = ejemplos/cruce_sistema.csv · B = ejemplos/cruce_presentado.txt")
+        st.caption("Para probar: grupo A = ejemplos/cruce_sistema.csv · grupo B = ejemplos/cruce_presentado.txt")

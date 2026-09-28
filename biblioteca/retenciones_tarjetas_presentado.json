@@ -1,9 +1,9 @@
 {
- "nombre": "Retenciones sobre cobros con tarjeta — archivo presentado",
+ "nombre": "Retenciones sobre cobros con tarjeta — presentación de la declaración jurada",
  "version": "1.0",
  "formato": "delimitado",
  "separador_campos": ";",
- "campos_ancho_fijo": true,
+ "campos_ancho_fijo": false,
  "separador_lineas": "CRLF",
  "codificacion": "latin-1",
  "tipos_registro": [
@@ -15,81 +15,99 @@
    "campos": [
     {
      "nombre": "identificador_fiscal",
-     "descripcion": "Identificador fiscal del sujeto retenido",
-     "tipo": "alfanumerico",
+     "descripcion": "Nº de identificador fiscal del contribuyente",
+     "tipo": "numerico",
      "longitud": 11,
-     "patron": "\\d{11}"
+     "evidencia": "1 | Nº de CUIT del Contribuyente | Numérico(11) | 30100100106"
     },
     {
      "nombre": "crc",
-     "descripcion": "Código de riesgo informado por el padrón",
+     "descripcion": "CRC del contribuyente en el período",
      "tipo": "numerico",
-     "longitud": 2
+     "longitud": 2,
+     "evidencia": "2 | CRC del contribuyente período | Numérico(2) | 34"
     },
     {
-     "nombre": "fecha_comprobante",
-     "descripcion": "Fecha del comprobante",
+     "nombre": "fecha_liquidacion",
+     "descripcion": "Fecha de liquidación",
      "tipo": "fecha",
      "longitud": 10,
+     "evidencia": "3 | Fecha de Liquidación (en formato dd/mm/aaaa) | dd/mm/aaaa | 01/06/2020",
      "formato_fecha": "DD/MM/AAAA"
     },
     {
      "nombre": "fecha_retencion",
-     "descripcion": "Fecha de la retención",
+     "descripcion": "Fecha de retención",
      "tipo": "fecha",
      "longitud": 10,
+     "evidencia": "4 | Fecha de Retención (en formato dd/mm/aaaa) | dd/mm/aaaa | 01/06/2020",
      "formato_fecha": "DD/MM/AAAA"
     },
     {
-     "nombre": "numero_comprobante",
-     "descripcion": "Número de comprobante",
+     "nombre": "numero_liquidacion",
+     "descripcion": "Número de liquidación (identificación del comprobante)",
      "tipo": "numerico",
-     "longitud": 20
+     "longitud": 20,
+     "evidencia": "5 | Número de liquidación (identificación del Comprobante) | Numérico (20) | 123405603939"
     },
     {
-     "nombre": "campo_06",
-     "descripcion": "Sin descripción en el material recibido (000001 en la muestra)",
+     "nombre": "cantidad_operaciones",
+     "descripcion": "Cantidad de operaciones",
      "tipo": "numerico",
-     "longitud": 6
+     "longitud": 6,
+     "evidencia": "6 | Cantidad de operaciones | Numérico(6) | 54"
     },
     {
      "nombre": "monto_sujeto_retencion",
-     "descripcion": "Monto sujeto a retención",
+     "descripcion": "Monto sujeto a retención (sin separador de miles)",
      "tipo": "decimal",
      "longitud": 20,
+     "evidencia": "7 | Monto Sujeto a Retención (numérico sin separador de miles) | Numérico(18,2) | 15321.54",
      "decimales": 2
     },
     {
      "nombre": "alicuota",
-     "descripcion": "Alícuota aplicada (%)",
+     "descripcion": "Alícuota aplicada (porcentaje sin separador de miles)",
      "tipo": "decimal",
      "longitud": 4,
+     "evidencia": "8 | Alícuota aplicada (porcentaje sin separador de miles) | Numérico(2,2) | 2.5",
      "decimales": 2
     },
     {
      "nombre": "monto_retenido",
-     "descripcion": "Monto retenido",
+     "descripcion": "Monto retenido (campo 7 × campo 8 / 100)",
      "tipo": "decimal",
      "longitud": 20,
+     "evidencia": "9 | Monto Retenido (numérico sin separador de miles, se obtiene de multiplicar el campo 7 por el campo 8 y dividirlo por 100) | Numérico(18,2) | 383.04",
      "decimales": 2
     },
     {
-     "nombre": "campo_10",
-     "descripcion": "Sin descripción en el material recibido (1, 4 o 5 en la muestra)",
+     "nombre": "tipo_registro",
+     "descripcion": "Tipo de registro: 1 Retención, 2 Informativo, 3 Excluido, 4 No inscripto, 5 Sobretasa",
      "tipo": "numerico",
-     "longitud": 1
+     "longitud": 1,
+     "evidencia": "10 | Tipo de Registro (1-Retención, 2-Informativo, 3-Excluido, 4-No Inscripto, 5-Sobretasa) | Numérico(1) | 1",
+     "valores_permitidos": [
+      "1",
+      "2",
+      "3",
+      "4",
+      "5"
+     ]
     },
     {
-     "nombre": "campo_11",
-     "descripcion": "Sin descripción en el material recibido (00 en la muestra)",
+     "nombre": "codigo_operacion_exceptuada",
+     "descripcion": "Código de operación exceptuada (solo para tipo de registro 3-Excluido)",
      "tipo": "numerico",
-     "longitud": 2
+     "longitud": 2,
+     "evidencia": "11 | Código de Operación Exceptuada (sólo para tipo de registro 3-Excluido) | Numérico (2) | 12"
     },
     {
      "nombre": "jurisdiccion",
-     "descripcion": "Código de jurisdicción",
+     "descripcion": "Jurisdicción a imputar (no inscripto o sobretasa) o donde se realizó la operación (retención, informativo o excluido)",
      "tipo": "numerico",
-     "longitud": 3
+     "longitud": 3,
+     "evidencia": "12 | Jurisdicción a imputar (No Inscripto o Sobretasa), o donde se realizó la operación (Retención, Informativo o Excluido) | Numérico (3) | 904"
     }
    ]
   }
@@ -100,21 +118,30 @@
    "descripcion": "Monto retenido = monto sujeto × alícuota / 100, redondeado a 2 decimales",
    "ambito": "registro",
    "tipo_registro": "R",
-   "expresion": "monto_retenido == redondear(monto_sujeto_retencion * alicuota / 100, 2)"
+   "expresion": "monto_retenido == redondear(monto_sujeto_retencion * alicuota / 100, 2)",
+   "evidencia": "se obtiene de multiplicar el campo 7 por el campo 8 y dividirlo por 100"
   },
   {
    "id": "R2",
-   "descripcion": "El monto sujeto a retención es mayor que cero",
+   "descripcion": "El código de operación exceptuada solo se informa en registros tipo 3 (Excluido)",
+   "ambito": "registro",
+   "tipo_registro": "R",
+   "expresion": "implica(tipo_registro != 3, vacio(codigo_operacion_exceptuada) or codigo_operacion_exceptuada == 0)",
+   "evidencia": "sólo para tipo de registro 3-Excluido"
+  },
+  {
+   "id": "R3",
+   "descripcion": "El monto sujeto a retención es mayor que cero (supuesto, no figura en el diseño)",
    "ambito": "registro",
    "tipo_registro": "R",
    "expresion": "monto_sujeto_retencion > 0"
   },
   {
-   "id": "R3",
-   "descripcion": "La fecha de retención no es anterior a la del comprobante",
+   "id": "R4",
+   "descripcion": "La fecha de retención no es anterior a la de liquidación (supuesto, no figura en el diseño)",
    "ambito": "registro",
    "tipo_registro": "R",
-   "expresion": "fecha_retencion >= fecha_comprobante"
+   "expresion": "fecha_retencion >= fecha_liquidacion"
   }
  ]
 }

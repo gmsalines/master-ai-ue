@@ -226,3 +226,100 @@ def cruzar(a: pd.DataFrame, b: pd.DataFrame, llave_a: list[str], llave_b: list[s
         "llave": f"{'+'.join(llave_a)} ↔ {'+'.join(llave_b)}", "tolerancia": str(tolerancia),
     }
     return res
+
+
+# ------------------------------------------------------------------ detección del formato (sin IA)
+
+
+@dataclass
+class Deteccion:
+    nombre_spec: Optional[str]
+    spec: Optional[Especificacion]
+    tipo_registro: Optional[str]
+    confianza: float
+    detalle: str
+
+
+def detectar_especificacion(contenido: bytes, nombre: str, specs: dict) -> Deteccion:
+    """Prueba cada especificación de la biblioteca y elige la que lee el archivo con menos errores.
+
+    Confianza = proporción de registros leídos sin errores de estructura ni de campo.
+    """
+    ext = nombre.lower().rsplit(".", 1)[-1]
+    if ext in ("csv", "xlsx", "xls"):
+        return Deteccion(None, None, None, 1.0, "tabla (CSV/Excel): no necesita especificación")
+    texto = contenido.decode("utf-8", errors="replace")
+    mejor = Deteccion(None, None, None, 0.0, "ninguna especificación de la biblioteca lee este archivo")
+    for n, spec in specs.items():
+        es_xml = texto.lstrip().startswith("<")
+        if (spec.formato == "xml") != es_xml:
+            continue
+        try:
+            regs, estructura = leer(spec, texto)
+        except Exception:  # noqa: BLE001
+            continue
+        total = len(regs) + len(estructura)
+        if not total:
+            continue
+        buenos = sum(1 for r in regs if not r.errores)
+        conf = buenos / total
+        if conf > mejor.confianza:
+            repet = [t.codigo for t in spec.tipos_registro if t.max_ocurrencias != 1]
+            mejor = Deteccion(n, spec, repet[0] if repet else spec.tipos_registro[0].codigo, conf,
+                              f"{buenos} de {total} registros leídos sin errores con '{n}'")
+    return mejor
+
+
+def biblioteca_de_especificaciones(*carpetas) -> dict:
+    """Especificaciones guardadas en disco (p. ej. gold/ y especificaciones/), por nombre de archivo."""
+    import json as _json
+    from pathlib import Path as _Path
+
+    out = {}
+    for c in carpetas:
+        for p in sorted(_Path(c).glob("*.json")) if _Path(c).exists() else []:
+            try:
+                d = _json.loads(p.read_text(encoding="utf-8"))
+                out[p.stem] = Especificacion.model_validate(d.get("spec", d))
+            except Exception:  # noqa: BLE001
+                continue
+    return out
+
+
+# ------------------------------------------------------------------ llave con IA (solo si el código no alcanza)
+
+
+def llave_clara(sugeridas: list[ParLlave], umbral: float = 0.6) -> bool:
+    return bool(sugeridas) and sugeridas[0].puntaje >= umbral
+
+
+def sugerir_llave_ia(a: pd.DataFrame, b: pd.DataFrame, proveedor, muestras: int = 5) -> dict:
+    """Pregunta al LLM por la llave y las columnas a comparar, enviando solo nombres de columna y unas pocas muestras.
+
+    La respuesta se valida contra las columnas reales (no se aceptan columnas inventadas) y la llave se
+    comprueba midiendo el solapamiento de valores. Devuelve {"llave_a", "llave_b", "comparar", "motivo", "solape"}.
+    """
+    import json as _json
+
+    def perfil(df):
+        return {c: [str(v) for v in df[c].dropna().astype(str).head(muestras)] for c in df.columns if not c.startswith("_")}
+
+    pedido = (
+        "Tengo dos tablas que quiero conciliar. Columnas con ejemplos de valores:\n"
+        f"A: {_json.dumps(perfil(a), ensure_ascii=False)}\nB: {_json.dumps(perfil(b), ensure_ascii=False)}\n"
+        "Indicá qué columna(s) identifican el mismo registro en ambas (llave) y qué pares de columnas conviene comparar "
+        '(importes, fechas). Respondé SOLO JSON: {"llave_a": ["col"], "llave_b": ["col"], '
+        '"comparar": [["colA", "colB"]], "motivo": "breve"}. Usá exactamente los nombres de columna dados.'
+    )
+    r = proveedor.completar([{"role": "user", "content": pedido}], modo_json=True, temperatura=0.0, max_tokens=800)
+    t = r.texto
+    d = _json.loads(t[t.find("{") : t.rfind("}") + 1])
+    la = [c for c in d.get("llave_a") or [] if c in a.columns]
+    lb = [c for c in d.get("llave_b") or [] if c in b.columns]
+    if not la or len(la) != len(lb):
+        raise ValueError("la IA no propuso una llave válida con las columnas existentes")
+    comparar = [(x, y) for x, y in (d.get("comparar") or []) if x in a.columns and y in b.columns]
+    ka, kb = set(_clave(a, la)), set(_clave(b, lb))
+    solape = len(ka & kb) / max(1, min(len(ka), len(kb)))
+    return {"llave_a": la, "llave_b": lb, "comparar": comparar, "motivo": d.get("motivo", ""), "solape": solape,
+            "tokens": r.tokens_entrada + r.tokens_salida}

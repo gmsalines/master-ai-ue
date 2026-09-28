@@ -419,3 +419,22 @@ def test_regla_de_registro_unico_con_valor_es_satisfacible():
     for r in d["reglas"][:2]:
         r["ambito"], r["tipo_registro"] = "registro", "09"
     assert verificar(d, manual("m1_retenciones")).valida
+
+
+def test_deteccion_de_formato_y_llave_ia_validada():
+    import pandas as pd
+    from regspec.cruce import biblioteca_de_especificaciones, detectar_especificacion, llave_clara, sugerir_llave, sugerir_llave_ia
+    bib = biblioteca_de_especificaciones(RAIZ / "gold")
+    det = detectar_especificacion((RAIZ / "ejemplos/cruce_presentado.txt").read_bytes(), "x.txt", bib)
+    assert det.nombre_spec == "m1_retenciones" and det.tipo_registro == "02" and det.confianza == 1.0
+    # columnas sin nombres parecidos ni valores idénticos: el código no encuentra llave clara
+    A = pd.DataFrame({"ref": ["F-1", "F-2", "F-3"], "total": ["10", "20", "30"]})
+    B = pd.DataFrame({"comprobante": ["F-1", "F-2", "F-9"], "monto": ["10", "25", "5"]})
+    assert llave_clara(sugerir_llave(A, B)) in (True, False)
+    # la IA propone una columna inexistente y una válida: solo se acepta lo que existe
+    prov = Guionado([json.dumps({"llave_a": ["ref"], "llave_b": ["comprobante"], "comparar": [["total", "monto"], ["x", "y"]], "motivo": "ids"})])
+    r = sugerir_llave_ia(A, B, prov)
+    assert r["llave_a"] == ["ref"] and r["comparar"] == [("total", "monto")] and round(r["solape"], 2) == 0.67
+    prov = Guionado([json.dumps({"llave_a": ["inventada"], "llave_b": ["comprobante"]})])
+    with pytest.raises(ValueError):
+        sugerir_llave_ia(A, B, prov)

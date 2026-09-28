@@ -6,3 +6,5 @@ resultados/
 .env
 .cache_llm/
 .streamlit/secrets.toml
+especificaciones/*.json
+!especificaciones/.gitkeep

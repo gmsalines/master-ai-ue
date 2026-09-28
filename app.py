@@ -69,11 +69,21 @@ with st.sidebar:
         d = json.loads(subida.read())
         ss.spec = Especificacion.model_validate(d.get("spec", d))
 
-st.title("De la normativa al archivo validado")
-st.caption("Un LLM convierte el manual técnico en una especificación formal; un verificador la comprueba y devuelve los errores al modelo hasta que es correcta.")
+st.title("Conciliación de archivos regulatorios")
+st.caption("Subí dos archivos (CSV, Excel, TXT posicional o XML) y el sistema los cruza. Si un formato es nuevo, "
+           "lo aprende de su manual técnico: un LLM lo convierte en una especificación formal y un verificador la comprueba.")
+BIBLIO = RAIZ / "especificaciones"
 
-t1, t2, t3, t4, t5 = st.tabs(["1 · Compilar manual", "2 · Especificación", "3 · Validar archivo", "4 · Generar informe",
-                              "5 · Cruzar archivos"])
+
+def guardar_en_biblioteca(spec: Especificacion, nombre: str) -> str:
+    import re as _re
+    BIBLIO.mkdir(exist_ok=True)
+    slug = _re.sub(r"[^a-z0-9]+", "_", nombre.lower()).strip("_")[:50] or "especificacion"
+    (BIBLIO / f"{slug}.json").write_text(spec.model_dump_json(indent=2), encoding="utf-8")
+    return slug
+
+tc, t1, t2, t3, t4 = st.tabs(["🔀 Cruzar archivos", "📘 Aprender un formato (manual)", "📋 Especificación",
+                              "✅ Validar archivo", "🧾 Generar archivo"])
 
 # ---------------------------------------------------------------- 1. compilar
 with t1:
@@ -131,6 +141,9 @@ with t1:
             if r.error:
                 st.error(r.error)
             ss.spec = r.spec
+            if r.spec is not None and r.valida:
+                st.success(f"Guardada en la biblioteca como '{guardar_en_biblioteca(r.spec, r.spec.nombre)}': "
+                           "desde ahora el sistema reconoce este formato al cruzar archivos.")
             if r.spec is not None:
                 st.metric("Resultado", "Válida" if r.valida else "Con errores", f"{len(r.iteraciones)} iteraciones · {r.tokens} tokens")
 
@@ -232,37 +245,73 @@ with t4:
                     st.download_button("Descargar archivo", r.contenido, "informe." + ("xml" if spec.formato == "xml" else "txt"))
 
 
-# ---------------------------------------------------------------- 5. cruzar (sin IA)
-with t5:
+
+# ---------------------------------------------------------------- flujo principal: cruzar
+with tc:
     from decimal import Decimal
 
-    from regspec.cruce import cruzar, sugerir_comparaciones, sugerir_llave, tabla_desde_archivo
+    from regspec.cruce import (
+        biblioteca_de_especificaciones, cruzar, detectar_especificacion, llave_clara, sugerir_comparaciones,
+        sugerir_llave, sugerir_llave_ia, tabla_desde_archivo,
+    )
+    from regspec.llm.cache import ProveedorConCache
 
-    st.write("Cruzá dos archivos: CSV o Excel, o un TXT/XML regulatorio leído con una especificación. "
-             "Este flujo **no usa IA**: no gasta tokens.")
-    # especificaciones disponibles: la compilada en esta sesión + las de la carpeta gold/
-    specs = {}
+    biblioteca = biblioteca_de_especificaciones(BIBLIO, RAIZ / "gold")
     if ss.spec is not None:
-        specs["(la compilada en esta sesión)"] = ss.spec
-    for g in sorted((RAIZ / "gold").glob("*.json")):
-        specs[g.stem] = Especificacion.model_validate(json.loads(g.read_text(encoding="utf-8")))
+        biblioteca["(compilada en esta sesión)"] = ss.spec
+
+    st.subheader("1 · Subí los archivos")
 
     def cargar(lado: str, col):
         with col:
-            st.subheader(f"Archivo {lado}")
             f = st.file_uploader(f"Archivo {lado}", type=["csv", "xlsx", "xls", "txt", "xml", "dat"], key=f"cruce_{lado}")
             if f is None:
                 return None
-            spec_sel, tipo = None, None
-            if not f.name.lower().endswith((".csv", ".xlsx", ".xls")):
-                nombre_spec = st.selectbox(f"Especificación para leer {f.name}", list(specs) or ["(ninguna)"], key=f"spec_{lado}")
-                spec_sel = specs.get(nombre_spec)
-                if spec_sel is None:
-                    st.error("Primero compilá o cargá la especificación del formato.")
-                    return None
-                tipos = [t.codigo for t in spec_sel.tipos_registro]
-                repet = [t.codigo for t in spec_sel.tipos_registro if t.max_ocurrencias != 1]
-                tipo = st.selectbox("Tipo de registro a cruzar", tipos, index=tipos.index(repet[0]) if repet else 0, key=f"tipo_{lado}")
+            det = detectar_especificacion(f.getvalue(), f.name, biblioteca)
+            spec_sel, tipo = det.spec, det.tipo_registro
+            if f.name.lower().endswith((".csv", ".xlsx", ".xls")):
+                st.caption("Tabla (CSV/Excel)")
+            elif det.spec is not None and det.confianza >= 0.9:
+                st.success(f"Formato reconocido: **{det.nombre_spec}** · {det.detalle}")
+                with st.expander("Cambiar formato o tipo de registro"):
+                    nombres = list(biblioteca)
+                    n = st.selectbox("Especificación", nombres, index=nombres.index(det.nombre_spec), key=f"spec_{lado}")
+                    spec_sel = biblioteca[n]
+                    tipos = [t.codigo for t in spec_sel.tipos_registro]
+                    tipo = st.selectbox("Tipo de registro a cruzar", tipos,
+                                        index=tipos.index(tipo) if tipo in tipos else 0, key=f"tipo_{lado}")
+            else:
+                st.warning("No reconozco el formato de este archivo. Subí su **manual técnico** y lo aprendo "
+                           "(usa IA una sola vez; después queda guardado).")
+                man = st.file_uploader("Manual técnico (PDF, MD o TXT)", type=["pdf", "md", "txt"], key=f"manual_{lado}")
+                if man is not None and st.button("Aprender el formato", key=f"aprender_{lado}", type="primary"):
+                    if man.name.lower().endswith(".pdf"):
+                        from pypdf import PdfReader
+                        texto = "\n".join(p.extract_text() or "" for p in PdfReader(io.BytesIO(man.getvalue())).pages)
+                    else:
+                        texto = man.getvalue().decode("utf-8", errors="replace")
+                    with st.status("Leyendo el manual…", expanded=True) as estado:
+                        if proveedor is None:
+                            d = extraer_base(texto)
+                            ver = verificar(d, texto)
+                            spec_nueva, valida = ver.spec, ver.valida
+                        else:
+                            r = extraer(texto, ProveedorConCache(proveedor, usar=usar_cache),
+                                        ConfigExtraccion(max_iteraciones=max_it, modo=modo),
+                                        al_paso=lambda p: estado.write(f"{'✔' if p.ok else '✖'} {p.nombre}"),
+                                        al_iterar=lambda it: estado.write(
+                                            "verificación: OK" if it.errores == 0 else f"verificación: {it.errores} errores → corrigiendo"))
+                            spec_nueva, valida = r.spec, r.valida
+                            if r.error:
+                                st.error(r.error)
+                        if spec_nueva is not None and valida:
+                            nombre = guardar_en_biblioteca(spec_nueva, spec_nueva.nombre)
+                            estado.update(label=f"Formato aprendido y guardado como '{nombre}'", state="complete")
+                            st.rerun()
+                        else:
+                            estado.update(label="No se obtuvo una especificación válida", state="error")
+                            st.info("Podés revisarla y corregirla en la pestaña «Aprender un formato».")
+                return None
             try:
                 df = tabla_desde_archivo(f.getvalue(), f.name, spec_sel, tipo)
             except Exception as e:  # noqa: BLE001
@@ -274,26 +323,50 @@ with t5:
 
     ca, cb = st.columns(2)
     A, B = cargar("A", ca), cargar("B", cb)
+
     if A is not None and B is not None and len(A) and len(B):
-        st.subheader("Configuración del cruce")
+        st.subheader("2 · ¿Cómo los cruzo?")
+        clave_cache = f"sug_{st.session_state.get('cruce_A').name}_{st.session_state.get('cruce_B').name}_{len(A)}_{len(B)}"
         sugeridas = sugerir_llave(A, B)
-        if sugeridas:
-            st.caption("Llave sugerida (sin IA): " + "; ".join(f"{p.col_a} ↔ {p.col_b} — {p.motivo}" for p in sugeridas[:2]))
-        c1, c2, c3 = st.columns(3)
+        sug = None
+        if llave_clara(sugeridas):
+            p0 = sugeridas[0]
+            sug = {"llave_a": [p0.col_a], "llave_b": [p0.col_b], "comparar": sugerir_comparaciones(A, B, [p0.col_a], [p0.col_b]),
+                   "motivo": p0.motivo, "origen": "automática (sin IA)"}
+        elif proveedor is not None:
+            if clave_cache not in ss:
+                try:
+                    with st.spinner("No encontré una llave clara; se la consulto a la IA…"):
+                        ss[clave_cache] = sugerir_llave_ia(A, B, ProveedorConCache(proveedor, usar=usar_cache))
+                except Exception as e:  # noqa: BLE001
+                    ss[clave_cache] = {"error": str(e)}
+            r_ia = ss[clave_cache]
+            if "error" in r_ia:
+                st.warning(f"La IA no pudo sugerir una llave: {r_ia['error']}")
+            else:
+                sug = {**r_ia, "origen": f"IA ({r_ia.get('tokens', 0)} tokens; coinciden {r_ia['solape']:.0%} de los valores)"}
+        if sug:
+            st.info(f"**Sugerencia {sug['origen']}:** cruzar por **{' + '.join(sug['llave_a'])}** (A) ↔ "
+                    f"**{' + '.join(sug['llave_b'])}** (B). {sug.get('motivo', '')}")
+        else:
+            st.warning("No encontré una llave clara: elegila vos.")
         cols_a = [c for c in A.columns if not c.startswith("_")]
         cols_b = [c for c in B.columns if not c.startswith("_")]
-        llave_a = c1.multiselect("Llave en A", cols_a, default=[sugeridas[0].col_a] if sugeridas else [])
-        llave_b = c2.multiselect("Llave en B", cols_b, default=[sugeridas[0].col_b] if sugeridas else [])
+        c1, c2, c3 = st.columns(3)
+        llave_a = c1.multiselect("Llave en A", cols_a, default=(sug or {}).get("llave_a", []), key=f"la_{clave_cache}")
+        llave_b = c2.multiselect("Llave en B", cols_b, default=(sug or {}).get("llave_b", []), key=f"lb_{clave_cache}")
         tol = c3.number_input("Tolerancia en importes", value=0.01, min_value=0.0, step=0.01, format="%.2f")
-        comp_def = sugerir_comparaciones(A, B, llave_a, llave_b) if llave_a and llave_b else []
+        comp_def = (sug or {}).get("comparar") or (sugerir_comparaciones(A, B, llave_a, llave_b) if llave_a and llave_b else [])
         comp_txt = st.text_area("Columnas a comparar (una por línea: columna_A = columna_B)",
-                                "\n".join(f"{x} = {y}" for x, y in comp_def), height=110)
+                                "\n".join(f"{x} = {y}" for x, y in comp_def), height=110, key=f"cmp_{clave_cache}")
         comparar = []
         for linea in comp_txt.splitlines():
             if "=" in linea:
                 x, y = [t.strip() for t in linea.split("=", 1)]
                 if x in A.columns and y in B.columns:
                     comparar.append((x, y))
+
+        st.subheader("3 · Resultado")
         if st.button("Cruzar", type="primary", disabled=not (llave_a and len(llave_a) == len(llave_b))):
             r = cruzar(A, B, llave_a, llave_b, comparar, Decimal(str(tol)))
             m1, m2, m3, m4 = st.columns(4)
@@ -308,3 +381,5 @@ with t5:
                     st.markdown(f"**{titulo}**")
                     st.dataframe(df, hide_index=True, width="stretch")
             st.download_button("Descargar resultado (Excel)", r.a_excel(), "cruce.xlsx")
+    elif A is None or B is None:
+        st.caption("Para probar: A = ejemplos/cruce_sistema.csv · B = ejemplos/cruce_presentado.txt")

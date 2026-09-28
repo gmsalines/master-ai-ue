@@ -182,16 +182,25 @@ with t2:
 
 # ---------------------------------------------------------------- 3. validar
 with t3:
-    spec = ss.spec
-    if spec is None:
-        st.info("Primero compilá un manual o cargá una especificación.")
-    else:
-        arch = st.file_uploader("Archivo a validar", type=["txt", "xml", "dat"], key="validar")
-        if arch is not None:
-            inf = validar(spec, arch.read().decode("utf-8", errors="replace"))
-            (st.success if inf.ok else st.error)(inf.resumen(0).splitlines()[0])
-            if inf.hallazgos:
-                st.dataframe(pd.DataFrame(inf.a_dicts()), hide_index=True, width="stretch")
+    from regspec.cruce import _decodificar, biblioteca_de_especificaciones as _biblio, detectar_especificacion as _detectar
+
+    specs_v = _biblio(RAIZ / "especificaciones", RAIZ / "biblioteca", RAIZ / "gold")
+    if ss.spec is not None:
+        specs_v = {"(compilada en esta sesión)": ss.spec, **specs_v}
+    arch = st.file_uploader("Archivo a validar", type=["txt", "xml", "dat"], key="validar")
+    if arch is not None:
+        det = _detectar(arch.getvalue(), arch.name, specs_v)
+        nombres_v = list(specs_v)
+        idx = nombres_v.index(det.nombre_spec) if det.nombre_spec in nombres_v else 0
+        if det.spec is not None:
+            st.caption(f"Formato reconocido: {det.nombre_spec} · {det.detalle}")
+        elegido = st.selectbox("Especificación", nombres_v, index=idx, key="spec_validar")
+        spec = specs_v[elegido]
+        with st.spinner("Validando campo a campo y reglas…"):
+            inf = validar(spec, _decodificar(arch.getvalue(), spec.codificacion))
+        (st.success if inf.ok else st.error)(inf.resumen(0).splitlines()[0])
+        if inf.hallazgos:
+            st.dataframe(pd.DataFrame(inf.a_dicts()), hide_index=True, width="stretch")
 
 # ---------------------------------------------------------------- 4. generar
 with t4:
@@ -371,7 +380,7 @@ with tc:
     leidas = [(gi, f, tabla_silenciosa(f)) for gi, f in subidos]
     leidas = [x for x in leidas if x[2] is not None]
     sugeridas = {}
-    if len(leidas) >= 2:
+    if leidas:
         firma = tuple((gi, f.name, f.size) for gi, f, _ in leidas)
         for (gi, f, _), s in zip(leidas, llaves_sugeridas(firma, [d for _, _, d in leidas])):
             if s is not None:
@@ -398,11 +407,11 @@ with tc:
                     s = sugeridas.get((gi, f.name))
                     sug = [s[0]] if s and s[0] in cols else []
                     c1, c2 = st.columns([2, 1])
-                    llave = c1.multiselect("Llave (una o varias columnas)", cols, default=sug, key=f"llave_{gi}_{fi}",
+                    llave = c1.multiselect("Llave (una o varias columnas)", cols, default=sug, key=f"llave_{gi}_{fi}_{'_'.join(map(str, sug))}_{len(leidas)}",
                                            help="Sugerida por código: la columna cuyos valores coinciden con los de los otros archivos.")
                     tr_def = s[1] if s else "exacta"
                     tr = c2.selectbox("Normalizar la llave", list(TRANSFORMACIONES), format_func=TRANSFORMACIONES.get,
-                                      index=list(TRANSFORMACIONES).index(tr_def), key=f"tr_{gi}_{fi}")
+                                      index=list(TRANSFORMACIONES).index(tr_def), key=f"tr_{gi}_{fi}_{tr_def}_{len(leidas)}")
                     if s and s[2] > 0 and llave == sug:
                         st.caption(f"Coincidencia de valores con la llave del primer archivo: {s[2]:.0%}")
                     if llave:
@@ -447,7 +456,8 @@ with tc:
             fila = []
             for j, (nom, _, _, cols_g) in enumerate(listos):
                 num = [c for c in cols_g if re.search(r"monto|importe|total|base|valor|saldo|retenid|retenci|prima|pagad", c, re.I)
-                       and not re.search(r"diferencia|control", c, re.I)] or cols_g
+                       and not re.search(r"diferencia|control|fecha|date|tipo|codigo|número|numero", c, re.I)] or cols_g
+                num.sort(key=lambda c: 0 if re.search(r"monto|importe", c, re.I) else 1)
                 if j == 0:
                     elegido = num[min(k, len(num) - 1)]
                 else:  # la más parecida a la elegida en el primer grupo

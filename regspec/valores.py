@@ -1,4 +1,8 @@
-"""Conversión campo <-> texto, para ancho fijo y XML."""
+"""Conversión campo <-> texto, para ancho fijo, delimitado y XML.
+
+`formato` es el modo de representación: "ancho_fijo" (decimales implícitos), "xml" y "delimitado"
+(punto decimal explícito) o "delimitado_fijo" (como delimitado, pero cada campo con su ancho exacto).
+"""
 from __future__ import annotations
 
 import re
@@ -37,9 +41,18 @@ def _chequear_dominio(campo: Campo, txt: str) -> None:
         raise ErrorValor(f"'{txt}' no cumple el patrón {campo.patron}")
 
 
+def ancho_texto(campo: Campo) -> int:
+    """Ancho en caracteres de un campo en modo delimitado_fijo."""
+    if campo.tipo == "fecha" and campo.formato_fecha:
+        return len(campo.formato_fecha)
+    return campo.longitud + (1 if campo.tipo == "decimal" and campo.decimales else 0)
+
+
 def desde_texto(campo: Campo, crudo: Optional[str], formato: str) -> Any:
     """Convierte el texto de un campo a valor Python. Devuelve None si no fue informado."""
     ancho_fijo = formato == "ancho_fijo"
+    if formato == "delimitado_fijo" and crudo is not None and crudo.strip() != "" and len(crudo) != ancho_texto(campo):
+        raise ErrorValor(f"'{crudo}' mide {len(crudo)} caracteres y el campo tiene ancho {ancho_texto(campo)}")
     if crudo is None:
         txt = ""
     elif ancho_fijo and campo.tipo in ("alfanumerico", "constante"):
@@ -76,7 +89,7 @@ def desde_texto(campo: Campo, crudo: Optional[str], formato: str) -> Any:
         if campo.tipo == "decimal":
             return Decimal(entero).scaleb(-campo.decimales)
         return Decimal(entero)
-    # XML: representación con punto decimal explícito
+    # XML y delimitado: representación con punto decimal explícito
     if not re.fullmatch(r"-?\d+(\.\d+)?", txt):
         raise ErrorValor(f"'{txt}' no es un número válido")
     if campo.tipo == "numerico" and "." in txt:
@@ -106,13 +119,15 @@ def a_texto(campo: Campo, valor: Any, formato: str) -> Optional[str]:
     if valor is None or (isinstance(valor, str) and valor.strip() == ""):
         if campo.obligatorio:
             raise ErrorValor(f"campo obligatorio '{campo.nombre}' sin valor")
-        return " " * campo.longitud if ancho_fijo else None
+        if ancho_fijo or formato == "delimitado_fijo":
+            return " " * (campo.longitud if ancho_fijo else ancho_texto(campo))
+        return "" if formato == "delimitado" else None
 
     if campo.tipo in ("alfanumerico", "constante"):
         s = str(valor)
         if len(s) > campo.longitud:
             raise ErrorValor(f"'{s}' supera la longitud {campo.longitud} del campo '{campo.nombre}'")
-        return s.ljust(campo.longitud) if ancho_fijo else s
+        return s.ljust(campo.longitud) if ancho_fijo or formato == "delimitado_fijo" else s
 
     if campo.tipo == "fecha":
         if isinstance(valor, str):
@@ -138,6 +153,8 @@ def a_texto(campo: Campo, valor: Any, formato: str) -> Optional[str]:
     s = f"{d:.{dec}f}"
     if len(s.replace("-", "").replace(".", "").lstrip("0") or "0") > campo.longitud:
         raise ErrorValor(f"{d} supera los {campo.longitud} dígitos del campo '{campo.nombre}'")
+    if formato == "delimitado_fijo":
+        s = ("-" if s.startswith("-") else "") + s.lstrip("-").zfill(ancho_texto(campo) - (1 if s.startswith("-") else 0))
     return s
 
 

@@ -198,6 +198,7 @@ def verificar(
             return ResultadoVerificacion(None, P)
 
     ancho_fijo = spec.formato == "ancho_fijo"
+    xml = spec.formato == "xml"
 
     # 1. estructura
     if not spec.tipos_registro:
@@ -205,7 +206,9 @@ def verificar(
     if ancho_fijo and not spec.longitud_registro:
         err("SIN_LONGITUD", "longitud_registro", "en ancho fijo hay que indicar la longitud de registro",
             "Buscá en el manual la longitud total de cada línea.", "estructura")
-    if not ancho_fijo and not spec.etiqueta_raiz_xml:
+    if spec.formato == "delimitado" and not spec.separador_campos:
+        err("SIN_SEPARADOR", "separador_campos", "en un archivo delimitado hay que indicar el separador de campos", etapa="estructura")
+    if xml and not spec.etiqueta_raiz_xml:
         err("SIN_RAIZ", "etiqueta_raiz_xml", "en XML hay que indicar el elemento raíz", etapa="estructura")
     vistos: dict[str, int] = {}
     for i, tr in enumerate(spec.tipos_registro):
@@ -215,14 +218,14 @@ def verificar(
         vistos[tr.codigo] = i
         if tr.max_ocurrencias is not None and tr.max_ocurrencias < tr.min_ocurrencias:
             err("OCURRENCIAS", r, f"max_ocurrencias ({tr.max_ocurrencias}) < min_ocurrencias ({tr.min_ocurrencias})", etapa="estructura")
-        if not ancho_fijo and not NCNAME.match(tr.etiqueta_xml or ""):
+        if xml and not NCNAME.match(tr.etiqueta_xml or ""):
             err("ETIQUETA_XML", r, f"etiqueta_xml inválida o ausente: {tr.etiqueta_xml!r}", "Usá el nombre exacto del elemento XML del manual.", "estructura")
     for pos in ("primero", "ultimo"):
         cods = [t.codigo for t in spec.tipos_registro if t.posicion == pos]
         if len(cods) > 1:
             err("POSICION", "tipos_registro", f"más de un registro marcado como '{pos}': {cods}", etapa="estructura")
 
-    if ancho_fijo:
+    if ancho_fijo or (spec.formato == "delimitado" and len(spec.tipos_registro) > 1):
         ids = []
         for i, tr in enumerate(spec.tipos_registro):
             c = spec.campo_identificador(tr)
@@ -231,7 +234,7 @@ def verificar(
                     f"ningún campo constante tiene valor_constante igual al código '{tr.codigo}'",
                     "El campo 'tipo de registro' debe ser tipo constante con valor_constante = codigo del registro.", "estructura")
             else:
-                ids.append((tr.codigo, c.inicio, c.longitud))
+                ids.append((tr.codigo, c.inicio, c.longitud) if ancho_fijo else (tr.codigo, tr.campos.index(c), 0))
         if len({(a, b) for _, a, b in ids}) > 1:
             err("IDENTIFICADOR_INCONSISTENTE", "tipos_registro",
                 f"el campo identificador no está en la misma posición en todos los registros: {ids}", etapa="estructura")
@@ -291,7 +294,7 @@ def verificar(
                     err("INCONSISTENCIA_FIN", r,
                         f"inicio={c.inicio} + longitud={c.longitud} - 1 = {c.fin_calculado}, pero fin={c.fin}",
                         "Releé la fila del manual: alguno de los tres valores está mal transcripto.", "layout")
-            else:
+            elif xml:
                 if not NCNAME.match(c.etiqueta_xml or ""):
                     err("ETIQUETA_XML", r, f"etiqueta_xml inválida o ausente: {c.etiqueta_xml!r}", etapa="campos")
 
@@ -354,7 +357,7 @@ def verificar(
                         err("ATRIBUTO_NO_RESPALDADO", ruta_c, f"el valor permitido '{v}' no aparece en el manual",
                             "Incluí solo códigos que el manual enumera.", "evidencia")
         # los ejemplos XML del propio manual tienen que ser válidos campo por campo
-        if not ancho_fijo:
+        if xml:
             for bloque in re.findall(r"```xml\s*(.*?)```", manual, re.S):
                 leidos, _ = leer(spec, bloque)
                 for rl in leidos:

@@ -56,7 +56,8 @@ regspec/
   llm/              proveedores desacoplados, prompts, extractor con bucle
   evaluacion/       batería de mutaciones, métricas, banco de evaluación
 manuales/           3 manuales ficticios de dificultad creciente
-gold/               especificaciones de referencia escritas a mano
+gold/               especificaciones de referencia escritas a mano (corpus de evaluación)
+biblioteca/         formatos reales cargados a mano (sin datos): se reconocen solos al subir un archivo
 ejemplos/           CSV para generar un informe; par sistema.csv / presentado.txt para el cruce
 tests/              41 tests
 app.py              demo en Streamlit
@@ -198,7 +199,15 @@ Lectura de la línea base: el parser convencional resuelve bien una tabla limpia
 - Numéricos sin signo, alineados a la derecha con ceros. Alfanuméricos alineados a la izquierda con espacios.
 - En ancho fijo, el tipo de registro se identifica con un campo `constante` cuyo valor es el código del registro.
 - En XML la estructura es plana: raíz → registros → campos simples.
+- Formato `delimitado` (p. ej. campos separados por `;`): los campos van en el orden de la lista y los decimales llevan punto explícito. Con `campos_ancho_fijo: true` cada campo ocupa además un ancho exacto (numéricos con ceros a la izquierda; el ancho de un decimal es `longitud + 1`). `codificacion` indica utf-8 o latin-1.
 - Si una regla referencia un dato opcional no informado, la regla no aplica a ese registro.
+
+## Conciliación: sugerencia de llaves y archivos grandes
+
+- La llave se sugiere **por código, en conjunto para todos los archivos**: se prueban las columnas identificadoras del primer archivo (descartando importes, fechas y textos) y, para cada una, la columna de cada otro archivo con mayor contención de valores, con la misma normalización para todos (exacta o solo números). Un filtro previo por perfil de dígitos evita recorrer columnas que no pueden coincidir.
+- Excel: se elige la hoja con más datos y se detecta la fila de encabezado (reportes con títulos arriba).
+- TXT delimitado de un solo tipo de registro: se lee con pandas; un padrón de ~4,9 millones de líneas (370 MB) se lee en ~8 s y el cruce completo (lookup contra el padrón + 3 grupos) tarda ~5 s. La validación campo a campo se hace en «Validar archivo».
+- La app acepta archivos de hasta 1 GB (`.streamlit/config.toml`).
 
 ## Limitaciones y líneas futuras
 

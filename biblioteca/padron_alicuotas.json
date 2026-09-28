@@ -1,0 +1,65 @@
+{
+ "nombre": "Padrón mensual de alícuotas por contribuyente",
+ "version": "1.0",
+ "formato": "delimitado",
+ "separador_campos": ";",
+ "separador_lineas": "LF",
+ "codificacion": "latin-1",
+ "tipos_registro": [
+  {
+   "codigo": "P",
+   "nombre": "Contribuyente",
+   "min_ocurrencias": 1,
+   "max_ocurrencias": null,
+   "campos": [
+    {
+     "nombre": "identificador_fiscal",
+     "descripcion": "Identificador fiscal del contribuyente (11 dígitos)",
+     "tipo": "alfanumerico",
+     "longitud": 11,
+     "patron": "\\d{11}"
+    },
+    {
+     "nombre": "denominacion",
+     "descripcion": "Nombre o razón social",
+     "tipo": "alfanumerico",
+     "longitud": 200
+    },
+    {
+     "nombre": "jurisdiccion_sede",
+     "descripcion": "Código de jurisdicción sede",
+     "tipo": "numerico",
+     "longitud": 3
+    },
+    {
+     "nombre": "periodo",
+     "descripcion": "Período de vigencia",
+     "tipo": "fecha",
+     "longitud": 6,
+     "formato_fecha": "AAAAMM"
+    },
+    {
+     "nombre": "crc",
+     "descripcion": "Código de riesgo del contribuyente (2 dígitos)",
+     "tipo": "numerico",
+     "longitud": 2
+    },
+    {
+     "nombre": "letra_alicuota",
+     "descripcion": "Letra que determina la alícuota",
+     "tipo": "alfanumerico",
+     "longitud": 1,
+     "patron": "[A-Z]"
+    },
+    {
+     "nombre": "codigos_por_jurisdiccion",
+     "descripcion": "Un dígito por jurisdicción (posición = jurisdicción)",
+     "tipo": "alfanumerico",
+     "longitud": 25,
+     "patron": "\\d{25}"
+    }
+   ]
+  }
+ ],
+ "reglas": []
+}

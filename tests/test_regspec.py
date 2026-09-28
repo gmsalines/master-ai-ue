@@ -1,9 +1,11 @@
 import copy
+import io
 import json
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from regspec.archivos import escribir, generar_xsd, leer, validar_xsd
@@ -477,3 +479,75 @@ def test_tres_grupos_y_suma_por_llave():
                        Grupo("C", [ArchivoGrupo("c", c, ["k"], "sin_ceros")])], [("m", "imp", "v")])
     assert r.resumen["en todos los grupos"] == 2 and r.resumen["en todos, con diferencias"] == 1
     assert r.resumen["solo en B"] == 1
+
+
+# ---------------------------------------------------------------- formato delimitado y lectura de tablas
+
+def _spec_delimitada(fijo: bool):
+    from regspec.dsl import Especificacion
+    return Especificacion.model_validate({
+        "nombre": "Retenciones delimitadas", "formato": "delimitado", "separador_campos": ";", "campos_ancho_fijo": fijo,
+        "tipos_registro": [{"codigo": "R", "nombre": "Retención", "max_ocurrencias": None, "campos": [
+            {"nombre": "id_fiscal", "tipo": "alfanumerico", "longitud": 11, "patron": r"\d{11}"},
+            {"nombre": "fecha", "tipo": "fecha", "longitud": 10, "formato_fecha": "DD/MM/AAAA"},
+            {"nombre": "base", "tipo": "decimal", "longitud": 12, "decimales": 2},
+            {"nombre": "alicuota", "tipo": "decimal", "longitud": 4, "decimales": 2},
+            {"nombre": "retenido", "tipo": "decimal", "longitud": 12, "decimales": 2}]}],
+        "reglas": [{"id": "R1", "descripcion": "cálculo", "ambito": "registro", "tipo_registro": "R",
+                    "expresion": "retenido == redondear(base * alicuota / 100, 2)"}]})
+
+
+def test_delimitado_ida_y_vuelta_y_verificador():
+    from regspec.archivos import escribir, leer
+    from regspec.verificador import verificar
+    for fijo in (False, True):
+        spec = _spec_delimitada(fijo)
+        assert verificar(spec, None).valida
+        regs = [("R", {"id_fiscal": "20123456789", "fecha": date(2026, 7, 6), "base": Decimal("12000"),
+                       "alicuota": Decimal("1.5"), "retenido": Decimal("180")})]
+        txt = escribir(spec, regs)
+        linea = txt.strip()
+        assert linea == ("20123456789;06/07/2026;0000012000.00;01.50;0000000180.00" if fijo
+                         else "20123456789;06/07/2026;12000.00;1.50;180.00")
+        leidos, estructura = leer(spec, txt)
+        assert not estructura and not leidos[0].errores and leidos[0].valores["retenido"] == Decimal("180.00")
+
+
+def test_delimitado_detecta_errores_y_reglas():
+    from regspec.validador import validar
+    spec = _spec_delimitada(True)
+    malo = ("20123456789;06/07/2026;0000012000.00;01.50;0000000180.00\n"
+            "20123456789;06/07/2026;0000012000.00;00.00;0000000047.71\n"   # viola R1
+            "2012345678X;06/07/2026;0000012000.00;01.50;0000000180.00\n"   # patrón
+            "20123456789;06/07/2026;12000.00;01.50;0000000180.00\n")       # ancho
+    inf = validar(spec, malo)
+    lineas = {e.linea for e in inf.errores}
+    assert {2, 3, 4} <= lineas and 1 not in lineas
+
+
+def test_tabla_delimitada_rapida_y_deteccion():
+    from regspec.cruce import detectar_especificacion, tabla_desde_archivo
+    spec = _spec_delimitada(True)
+    contenido = ("20123456789;06/07/2026;0000012000.00;01.50;0000000180.00\n" * 3).encode("latin-1")
+    det = detectar_especificacion(contenido, "x.txt", {"delim": spec})
+    assert det.nombre_spec == "delim" and det.confianza == 1.0
+    df = tabla_desde_archivo(contenido, "x.txt", spec)
+    assert list(df.columns) == ["id_fiscal", "fecha", "base", "alicuota", "retenido"] and len(df) == 3
+
+
+def test_excel_elige_hoja_y_fila_de_encabezado():
+    from regspec.cruce import tabla_desde_archivo
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as xw:
+        pd.DataFrame([["Resumen"]]).to_excel(xw, sheet_name="Resumen", index=False, header=False)
+        pd.DataFrame([[None, "Información contable", None], ["Id", "Nombre", "Monto"], ["1", "A", "10"], ["2", "B", "20"]]
+                     ).to_excel(xw, sheet_name="Detalle", index=False, header=False)
+    df = tabla_desde_archivo(buf.getvalue(), "r.xlsx")
+    assert list(df.columns) == ["Id", "Nombre", "Monto"] and df["Monto"].tolist() == ["10", "20"]
+
+
+def test_transformar_serie_equivale_a_transformar():
+    from regspec.grupos import transformar, transformar_serie
+    s = pd.Series(["20-05098256-5", "000123", " 0 ", "abc", None, float("nan"), "00", "á b", 123])
+    for tipo in ("exacta", "solo_numeros", "sin_ceros", "normalizada"):
+        assert transformar_serie(s, tipo).tolist() == [transformar(v, tipo) for v in s]

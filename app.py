@@ -259,7 +259,21 @@ with tc:
     )
     from regspec.llm.cache import ProveedorConCache
 
-    biblioteca = biblioteca_de_especificaciones(BIBLIO, RAIZ / "gold")
+    biblioteca = biblioteca_de_especificaciones(BIBLIO, RAIZ / "biblioteca", RAIZ / "gold")
+
+    @st.cache_resource(show_spinner="Reconociendo el formato…", max_entries=16)
+    def detectar_cacheado(contenido: bytes, nombre: str, nombres_specs: tuple, _biblio: dict):
+        return detectar_especificacion(contenido, nombre, _biblio)
+
+    @st.cache_resource(show_spinner="Leyendo el archivo…", max_entries=16)
+    def tabla_cacheada(contenido: bytes, nombre: str, spec_json: Optional[str], tipo: Optional[str], hoja: Optional[str]):
+        spec = Especificacion.model_validate_json(spec_json) if spec_json else None
+        return tabla_desde_archivo(contenido, nombre, spec, tipo, hoja)
+
+    @st.cache_resource(show_spinner=False, max_entries=16)
+    def hojas_cacheado(contenido: bytes):
+        from regspec.cruce import hoja_por_defecto, hojas_excel
+        return hojas_excel(contenido), hoja_por_defecto(contenido)
     if ss.spec is not None:
         biblioteca["(compilada en esta sesión)"] = ss.spec
 
@@ -268,10 +282,17 @@ with tc:
     def leer_uno(f, lado: str, i: int):
         if True:
             k = f"{lado}{i}"
-            det = detectar_especificacion(f.getvalue(), f.name, biblioteca)
-            spec_sel, tipo = det.spec, det.tipo_registro
-            if f.name.lower().endswith((".csv", ".xlsx", ".xls")):
-                st.caption("Tabla (CSV/Excel)")
+            det = detectar_cacheado(f.getvalue(), f.name, tuple(biblioteca), biblioteca)
+            spec_sel, tipo, hoja = det.spec, det.tipo_registro, None
+            if f.name.lower().endswith((".xlsx", ".xls", ".xlsm")):
+                hojas, por_defecto = hojas_cacheado(f.getvalue())
+                if len(hojas) > 1:
+                    hoja = st.selectbox("Hoja", hojas, index=hojas.index(por_defecto), key=f"hoja_{k}",
+                                        help="Se elige sola la hoja con más datos; la fila de encabezado también se detecta.")
+                else:
+                    st.caption("Tabla (Excel)")
+            elif f.name.lower().endswith(".csv"):
+                st.caption("Tabla (CSV)")
             elif det.spec is not None and det.confianza >= 0.9:
                 st.success(f"Formato reconocido: **{det.nombre_spec}** · {det.detalle}")
                 with st.expander("Cambiar formato o tipo de registro"):
@@ -314,55 +335,47 @@ with tc:
                             st.info("Podés revisarla y corregirla en la pestaña «Aprender un formato».")
                 return None
             try:
-                df = tabla_desde_archivo(f.getvalue(), f.name, spec_sel, tipo)
+                df = tabla_cacheada(f.getvalue(), f.name, spec_sel.model_dump_json() if spec_sel is not None else None, tipo, hoja)
             except Exception as e:  # noqa: BLE001
                 st.error(f"No se pudo leer {f.name}: {e}")
                 return None
-            st.caption(f"{len(df)} registros")
+            st.caption(f"{len(df):,} registros".replace(",", "."))
             return df
 
     from regspec.grupos import MODOS, OPERADORES, TRANSFORMACIONES, ArchivoGrupo, Filtro, Grupo, cruzar_grupos, transformar
 
-    def transformacion_sugerida(serie: pd.Series) -> str:
-        v = [str(x) for x in serie.dropna().astype(str).head(200) if str(x).strip()]
-        if v and sum(1 for x in v if re.sub(r"\D", "", x) and not x.isdigit() and len(re.sub(r"\D", "", x)) >= len(x) * 0.7) >= len(v) * 0.3:
-            return "solo_numeros"
-        return "exacta"
+    from regspec.grupos import sugerir_llaves
 
-    def columna_llave_sugerida(ref: Optional[tuple], df: pd.DataFrame) -> list[str]:
-        """Llave sugerida para un archivo: la columna cuyos valores coinciden con la llave de referencia (sin IA)."""
-        cols = [c for c in df.columns if not c.startswith("_")]
-        if ref is not None:
-            rdf, rcol, rtr = ref
-            refv = {transformar(x, rtr) for x in rdf[rcol].dropna().head(2000)}
-            mejor, puntaje = None, 0.0
-            for c in cols:
-                for tr in ("exacta", "solo_numeros", "sin_ceros"):
-                    vals = {transformar(x, tr) for x in df[c].dropna().head(2000)} - {""}
-                    if vals:
-                        p = len(vals & refv) / len(vals)
-                        if p > puntaje:
-                            mejor, puntaje = c, p
-            if mejor and puntaje >= 0.3:
-                return [mejor]
-        # sin referencia: la columna más "identificadora" (valores casi únicos y con nombre típico)
-        def score(c):
-            s = df[c].dropna().astype(str)
-            unic = s.nunique() / max(1, len(s))
-            tokens = [t for t in re.split(r"[^a-z0-9]+", c.lower()) if t]
-            ids = ("id", "nro", "numero", "num", "codigo", "cod", "clave", "llave", "doc", "documento", "comprobante",
-                   "identificador", "identification", "contribuyente", "cuenta", "poliza", "referencia", "ref")
-            nombre = 1.0 if any(t in ids or t.startswith(("ident", "docu", "compro")) for t in tokens) else 0.0
-            if any(t in ("monto", "importe", "total", "fecha", "saldo", "valor") for t in tokens):
-                nombre -= 1.0
-            return unic + nombre
-        return [max(cols, key=score)] if cols else []
+    @st.cache_resource(show_spinner="Buscando la llave que vincula los archivos…", max_entries=8)
+    def llaves_sugeridas(firma: tuple, _tablas: list):
+        """Sugerencia conjunta de llaves (sin IA): la columna del primer archivo que mejor vincula a todos."""
+        return sugerir_llaves(_tablas)
+
+    def tabla_silenciosa(f):
+        """Lectura sin interfaz (para la sugerencia de llaves); None si el formato no se reconoce."""
+        try:
+            det = detectar_cacheado(f.getvalue(), f.name, tuple(biblioteca), biblioteca)
+            if not f.name.lower().endswith((".csv", ".xlsx", ".xls", ".xlsm")) and (det.spec is None or det.confianza < 0.9):
+                return None
+            return tabla_cacheada(f.getvalue(), f.name, det.spec.model_dump_json() if det.spec is not None else None,
+                                  det.tipo_registro, None)
+        except Exception:  # noqa: BLE001
+            return None
 
     ss.setdefault("n_grupos", 2)
     st.caption("Cada **grupo** reúne uno o varios archivos. En cada archivo definís su **llave** (y cómo normalizarla); "
                "el cruce se hace sobre esa llave entre todos los grupos.")
     grupos_ui = []
-    referencia = None  # (df, col, transformación) de la primera llave definida: guía las sugerencias del resto
+    # sugerencia conjunta de llaves con todos los archivos ya subidos (se recalcula solo si cambian los archivos)
+    subidos = [(gi, f) for gi in range(ss.n_grupos) for f in (ss.get(f"gfiles_{gi}") or [])]
+    leidas = [(gi, f, tabla_silenciosa(f)) for gi, f in subidos]
+    leidas = [x for x in leidas if x[2] is not None]
+    sugeridas = {}
+    if len(leidas) >= 2:
+        firma = tuple((gi, f.name, f.size) for gi, f, _ in leidas)
+        for (gi, f, _), s in zip(leidas, llaves_sugeridas(firma, [d for _, _, d in leidas])):
+            if s is not None:
+                sugeridas[(gi, f.name)] = s
     for gi in range(ss.n_grupos):
         with st.container(border=True):
             c_nom, c_modo = st.columns([1, 2])
@@ -382,12 +395,16 @@ with tc:
                         completo = False
                         continue
                     cols = [c for c in df.columns if not c.startswith("_")]
-                    sug = columna_llave_sugerida(referencia, df)
+                    s = sugeridas.get((gi, f.name))
+                    sug = [s[0]] if s and s[0] in cols else []
                     c1, c2 = st.columns([2, 1])
-                    llave = c1.multiselect("Llave (una o varias columnas)", cols, default=sug, key=f"llave_{gi}_{fi}")
-                    tr_def = transformacion_sugerida(df[llave[0]]) if llave else "exacta"
+                    llave = c1.multiselect("Llave (una o varias columnas)", cols, default=sug, key=f"llave_{gi}_{fi}",
+                                           help="Sugerida por código: la columna cuyos valores coinciden con los de los otros archivos.")
+                    tr_def = s[1] if s else "exacta"
                     tr = c2.selectbox("Normalizar la llave", list(TRANSFORMACIONES), format_func=TRANSFORMACIONES.get,
                                       index=list(TRANSFORMACIONES).index(tr_def), key=f"tr_{gi}_{fi}")
+                    if s and s[2] > 0 and llave == sug:
+                        st.caption(f"Coincidencia de valores con la llave del primer archivo: {s[2]:.0%}")
                     if llave:
                         st.caption("Ejemplos de llave: " + ", ".join(
                             "|".join(transformar(v, tr) for v in fila) for fila in df[llave].head(3).itertuples(index=False)))
@@ -403,8 +420,6 @@ with tc:
                         traer = st.multiselect("Columnas a traer a la base", [c for c in cols if c not in llave], key=f"traer_{gi}_{fi}")
                     if llave:
                         arch_objs.append(ArchivoGrupo(f.name, df, llave, tr, filtros, traer))
-                        if referencia is None:
-                            referencia = (df, llave[0], tr)
                     else:
                         completo = False
             if not completo or not arch_objs:
@@ -431,8 +446,14 @@ with tc:
             cc = st.columns(len(listos))
             fila = []
             for j, (nom, _, _, cols_g) in enumerate(listos):
-                num = [c for c in cols_g if re.search(r"monto|importe|total|base|valor|saldo|retenid|prima|pagad", c, re.I)] or cols_g
-                fila.append(cc[j].selectbox(f"{nom}", cols_g, index=cols_g.index(num[min(k, len(num) - 1)]), key=f"cmp_{k}_{j}"))
+                num = [c for c in cols_g if re.search(r"monto|importe|total|base|valor|saldo|retenid|retenci|prima|pagad", c, re.I)
+                       and not re.search(r"diferencia|control", c, re.I)] or cols_g
+                if j == 0:
+                    elegido = num[min(k, len(num) - 1)]
+                else:  # la más parecida a la elegida en el primer grupo
+                    elegido = max(num, key=lambda c: difflib.SequenceMatcher(None, c.lower().replace("_", " "),
+                                                                          fila[0].lower().replace("_", " ")).ratio())
+                fila.append(cc[j].selectbox(f"{nom}", cols_g, index=cols_g.index(elegido), key=f"cmp_{k}_{j}"))
             comparaciones.append(tuple(fila))
         tol = st.number_input("Tolerancia en importes", value=0.01, min_value=0.0, step=0.01, format="%.2f", key="tol_g")
 

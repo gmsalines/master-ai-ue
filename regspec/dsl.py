@@ -1,7 +1,7 @@
 """Lenguaje de especificación declarativo (DSL) para archivos regulatorios.
 
 Una `Especificacion` describe, de forma ejecutable, el layout de un archivo
-(ancho fijo o XML), sus tipos de registro, sus campos y las reglas de negocio
+(ancho fijo, delimitado o XML), sus tipos de registro, sus campos y las reglas de negocio
 que debe cumplir. Es el "objetivo de compilación" del extractor: el LLM lee
 un manual en lenguaje natural y produce una instancia de este modelo.
 
@@ -11,6 +11,10 @@ Convenciones:
   (en ancho fijo los decimales son implícitos, sin separador).
 - Numéricos y decimales: alineados a la derecha, rellenos con ceros.
 - Alfanuméricos: alineados a la izquierda, rellenos con espacios.
+- Delimitado (p. ej. campos separados por ";"): los campos van en el orden de la lista,
+  los decimales llevan punto explícito y `longitud` es el máximo de caracteres/dígitos.
+  Con `campos_ancho_fijo` cada campo ocupa exactamente su ancho (numéricos con ceros a la
+  izquierda; el ancho de un decimal es longitud + 1 por el punto).
 """
 from __future__ import annotations
 
@@ -20,7 +24,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 TipoCampo = Literal["alfanumerico", "numerico", "decimal", "fecha", "constante"]
-Formato = Literal["ancho_fijo", "xml"]
+Formato = Literal["ancho_fijo", "delimitado", "xml"]
 Posicion = Literal["primero", "ultimo", "cualquiera"]
 Ambito = Literal["registro", "archivo"]
 
@@ -88,6 +92,9 @@ class Especificacion(BaseModel):
     formato: Formato
     longitud_registro: Optional[int] = Field(default=None, description="Longitud fija de cada línea (solo ancho fijo).")
     separador_lineas: Literal["LF", "CRLF"] = "LF"
+    separador_campos: Optional[str] = Field(default=None, description="Separador de campos (solo delimitado), p. ej. ';'.")
+    campos_ancho_fijo: bool = Field(default=False, description="Delimitado: cada campo ocupa exactamente su ancho (relleno con ceros o espacios).")
+    codificacion: str = Field(default="utf-8", description="Codificación del archivo (utf-8, latin-1).")
     etiqueta_raiz_xml: Optional[str] = None
     tipos_registro: list[TipoRegistro]
     reglas: list[Regla] = Field(default_factory=list)
@@ -142,11 +149,18 @@ class Especificacion(BaseModel):
         return None
 
     def campo_identificador(self, tr: TipoRegistro) -> Optional[Campo]:
-        """Campo constante cuyo valor coincide con el código del registro (ancho fijo)."""
+        """Campo constante cuyo valor coincide con el código del registro (ancho fijo y delimitado)."""
         for c in tr.campos:
             if c.tipo == "constante" and c.valor_constante is not None and c.valor_constante.strip() == tr.codigo.strip():
                 return c
         return None
+
+    @property
+    def modo_valores(self) -> str:
+        """Cómo se representan los valores: 'ancho_fijo', 'delimitado', 'delimitado_fijo' o 'xml'."""
+        if self.formato == "delimitado":
+            return "delimitado_fijo" if self.campos_ancho_fijo else "delimitado"
+        return self.formato
 
     @property
     def eol(self) -> str:

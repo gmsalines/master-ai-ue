@@ -71,6 +71,20 @@ def numero(v) -> Optional[Decimal]:
         return None
 
 
+def transformar_serie(s: pd.Series, tipo: str) -> pd.Series:
+    """Versión vectorizada de `transformar` (mismo resultado, apta para millones de filas)."""
+    t = s.astype("string").fillna("").str.strip()
+    t = t.mask(t.str.lower().isin(["nan", "none", "<na>"]), "")
+    if tipo == "solo_numeros":
+        d = t.str.replace(r"\D", "", regex=True)
+        t = d.str.lstrip("0").mask((d != "") & (d.str.lstrip("0") == ""), "0")
+    elif tipo == "sin_ceros":
+        t = t.str.lstrip("0").mask((t != "") & (t.str.lstrip("0") == ""), "0")
+    elif tipo == "normalizada":
+        t = t.map(lambda v: transformar(v, "normalizada"))
+    return t.astype(object)
+
+
 @dataclass
 class Filtro:
     columna: str
@@ -112,7 +126,11 @@ class ArchivoGrupo:
                 m = f.mascara(df)
                 excluidas += int(m.sum())
                 df = df[~m]
-        df["_llave"] = df[self.llave].apply(lambda fila: "|".join(transformar(v, self.transformacion) for v in fila), axis=1)
+        partes = [transformar_serie(df[c], self.transformacion) for c in self.llave]
+        llave = partes[0]
+        for p in partes[1:]:
+            llave = llave + "|" + p
+        df["_llave"] = llave
         df["_archivo"] = self.nombre
         return df, excluidas
 
@@ -232,3 +250,110 @@ def cruzar_grupos(grupos: list[Grupo], comparar: list[tuple[str, ...]] = (), tol
         resumen[f"cobertura de {g.nombre} (llaves presentes en todos los demás)"] = (
             f"{int(m.loc[presencia[f'en {g.nombre}'], 'en todos'].sum())} de {int(presencia[f'en {g.nombre}'].sum())}")
     return ResultadoGrupos(matriz, pd.DataFrame(difs), resumen, estad, detalles)
+
+
+# ------------------------------------------------------------------ sugerencia de llaves (sin IA)
+
+_NO_LLAVE = ("monto", "importe", "total", "fecha", "saldo", "valor", "alicuota", "alícuota", "ventas", "base",
+             "diferencia", "email", "mail", "leyenda", "denominacion", "denominación", "nombre", "razon", "social")
+
+
+def _muestra(serie: pd.Series, n: int = 3000) -> pd.Series:
+    s = serie.head(n * 3).dropna().astype(str).str.strip()
+    s = s[(s != "") & ~s.str.lower().isin(["nan", "none"])]
+    return s.head(n)
+
+
+def _perfil_digitos(serie: pd.Series) -> float:
+    """Mediana de la cantidad de dígitos significativos (sin ceros a la izquierda) de una muestra."""
+    s = _muestra(serie)
+    if s.empty:
+        return 0.0
+    return float(s.str.replace(r"\D", "", regex=True).str.lstrip("0").str.len().median())
+
+
+def _parece_llave(nombre: str, serie: pd.Series) -> bool:
+    tokens = [t for t in re.split(r"[^a-záéíóúñ0-9]+", nombre.lower()) if t]
+    if any(t in _NO_LLAVE for t in tokens):
+        return False
+    s = _muestra(serie, 500)
+    if s.nunique() < 2:
+        return False
+    fechas = s.str.match(r"^\d{1,4}[-/]\d{1,2}[-/]\d{1,4}").mean()
+    decimales = s.str.match(r"^-?\d+[.,]\d{1,3}$").mean()
+    return fechas < 0.5 and decimales < 0.5
+
+
+def _cobertura(anchor: set, serie: pd.Series, tr: str, memo: Optional[dict] = None) -> float:
+    """Contención entre los valores de la llave ancla y los de otra columna (la mayor de las dos direcciones)."""
+    if not anchor:
+        return 0.0
+    clave = (id(serie), tr)
+    if memo is not None and clave in memo:
+        t = memo[clave]
+    else:
+        t = transformar_serie(serie.dropna(), tr)
+        t = t[t != ""]
+        if memo is not None:
+            memo[clave] = t
+    if not len(t):
+        return 0.0
+    k = pd.unique(t[t.isin(anchor)]).size  # valores distintos de la columna presentes en el ancla
+    n = t.size if t.size > 200_000 else pd.unique(t).size  # columnas enormes: se aproxima por la cantidad de filas
+    return max(k / len(anchor), k / n)
+
+
+def puntaje_nombre(nombre: str) -> float:
+    tokens = [t for t in re.split(r"[^a-z0-9]+", nombre.lower()) if t]
+    ids = ("id", "nro", "numero", "num", "codigo", "cod", "clave", "llave", "doc", "documento", "comprobante",
+           "identificador", "identification", "contribuyente", "cuenta", "poliza", "referencia", "ref", "fiscal", "cuit",
+           "nif", "rut", "cnpj", "cpf", "rfc")
+    return 1.0 if any(t in ids or t.startswith(("ident", "docu", "compro")) for t in tokens) else 0.0
+
+
+def sugerir_llaves(tablas: list[pd.DataFrame]) -> list[Optional[tuple[str, str, float]]]:
+    """Sugiere una llave por tabla: (columna, transformación, cobertura con la llave ancla).
+
+    La primera tabla es el ancla. Para cada columna candidata del ancla y cada transformación se busca,
+    en cada una de las demás tablas, la columna con mayor contención de valores (filtrando antes por el
+    perfil de dígitos, para que un padrón de millones de filas no sea costoso). Gana la combinación que
+    mejor vincula a todas las tablas; la misma transformación se aplica a todas para que las llaves sean
+    comparables. Si ninguna columna vincula, se usa el nombre de la columna y la unicidad de sus valores.
+    """
+    if not tablas:
+        return []
+    cols = [[c for c in df.columns if not str(c).startswith("_") and _parece_llave(str(c), df[c])] for df in tablas]
+    perfiles = [{c: _perfil_digitos(df[c]) for c in cs} for df, cs in zip(tablas, cols)]
+    ancla = tablas[0]
+    memo: dict = {}
+    series = [{c: df[c] for c in cs} for df, cs in zip(tablas, cols)]
+    mejor = None  # (puntaje, col_ancla, tr, [(col, cob) por tabla])
+    for ca in sorted(cols[0], key=lambda c: -puntaje_nombre(str(c)))[:10]:
+        for tr in ("exacta", "solo_numeros"):
+            a_vals = set(pd.unique(transformar_serie(ancla[ca].dropna(), tr))) - {""}
+            if len(a_vals) < 2:
+                continue
+            elegidas, total = [(ca, 1.0)], 0.0
+            for sr, cs, pf in zip(series[1:], cols[1:], perfiles[1:]):
+                cand = [c for c in cs if abs(pf[c] - perfiles[0][ca]) <= 1.5]
+                cobs = [(c, _cobertura(a_vals, sr[c], tr, memo)) for c in cand]
+                c_best = max(cobs, key=lambda x: (x[1], puntaje_nombre(str(x[0])))) if cobs else (None, 0.0)
+                elegidas.append(c_best)
+                total += c_best[1]
+            puntaje = total + 0.01 * puntaje_nombre(str(ca)) - (0.001 if tr != "exacta" else 0)
+            if mejor is None or puntaje > mejor[0] + 1e-9:
+                mejor = (puntaje, ca, tr, elegidas)
+    out: list[Optional[tuple[str, str, float]]] = []
+    for i, df in enumerate(tablas):
+        if mejor is not None and mejor[0] >= 0.3 and mejor[3][i][0] is not None and mejor[3][i][1] >= 0.3:
+            out.append((mejor[3][i][0], mejor[2], mejor[3][i][1]))
+            continue
+        cs = cols[i] or [c for c in df.columns if not str(c).startswith("_")]
+        if not cs:
+            out.append(None)
+            continue
+        def score(c):
+            s = _muestra(df[c])
+            return (s.nunique() / max(1, len(s))) + puntaje_nombre(str(c))
+        out.append((max(cs, key=score), "exacta", 0.0))
+    return out

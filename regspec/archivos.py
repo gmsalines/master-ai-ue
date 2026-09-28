@@ -1,4 +1,4 @@
-"""Escritura y lectura de archivos (TXT posicional y XML) a partir de una especificación."""
+"""Escritura y lectura de archivos (TXT posicional, TXT delimitado y XML) a partir de una especificación."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -71,6 +71,66 @@ def leer_txt(spec: Especificacion, contenido: str) -> tuple[list[RegistroLeido],
             crudo = linea[c.inicio - 1 : c.inicio - 1 + c.longitud]
             try:
                 r.valores[c.nombre] = desde_texto(c, crudo, "ancho_fijo")
+            except ErrorValor as e:
+                r.valores[c.nombre] = None
+                r.errores.append((c.nombre, str(e)))
+        registros.append(r)
+    return registros, estructura
+
+
+# ------------------------------------------------------------------ TXT delimitado
+
+
+def escribir_delimitado(spec: Especificacion, registros: list[Registro]) -> str:
+    sep, modo, lineas = spec.separador_campos or ";", spec.modo_valores, []
+    for i, (codigo, valores) in enumerate(registros, 1):
+        tr = spec.tipo(codigo)
+        if tr is None:
+            raise ErrorValor(f"registro {i}: tipo '{codigo}' no definido en la especificación")
+        partes = []
+        for c in tr.campos:
+            try:
+                partes.append(a_texto(c, valores.get(c.nombre), modo) or "")
+            except ErrorValor as e:
+                raise ErrorValor(f"registro {i} ({codigo}): {e}")
+            if sep in partes[-1]:
+                raise ErrorValor(f"registro {i} ({codigo}): el valor de '{c.nombre}' contiene el separador '{sep}'")
+        lineas.append(sep.join(partes))
+    return spec.eol.join(lineas) + spec.eol
+
+
+def _identificar_delimitado(spec: Especificacion, partes: list[str]) -> Optional[TipoRegistro]:
+    if len(spec.tipos_registro) == 1:
+        return spec.tipos_registro[0]
+    for tr in spec.tipos_registro:
+        c = spec.campo_identificador(tr)
+        if c is None:
+            continue
+        k = tr.campos.index(c)
+        if k < len(partes) and partes[k].strip() == (c.valor_constante or "").strip():
+            return tr
+    return None
+
+
+def leer_delimitado(spec: Especificacion, contenido: str) -> tuple[list[RegistroLeido], list[tuple[int, str]]]:
+    sep, modo = spec.separador_campos or ";", spec.modo_valores
+    registros, estructura = [], []
+    lineas = contenido.replace("\r\n", "\n").split("\n")
+    if lineas and lineas[-1] == "":
+        lineas.pop()
+    for n, linea in enumerate(lineas, 1):
+        partes = linea.split(sep)
+        tr = _identificar_delimitado(spec, partes)
+        if tr is None:
+            estructura.append((n, "no se reconoce el tipo de registro"))
+            continue
+        if len(partes) != len(tr.campos):
+            estructura.append((n, f"la línea tiene {len(partes)} campos y el registro {tr.codigo} define {len(tr.campos)}"))
+            continue
+        r = RegistroLeido(linea=n, codigo=tr.codigo)
+        for c, crudo in zip(tr.campos, partes):
+            try:
+                r.valores[c.nombre] = desde_texto(c, crudo, modo)
             except ErrorValor as e:
                 r.valores[c.nombre] = None
                 r.errores.append((c.nombre, str(e)))
@@ -188,8 +248,12 @@ def leer_xml(spec: Especificacion, contenido: str) -> tuple[list[RegistroLeido],
 
 
 def escribir(spec: Especificacion, registros: list[Registro]) -> str:
+    if spec.formato == "delimitado":
+        return escribir_delimitado(spec, registros)
     return escribir_txt(spec, registros) if spec.formato == "ancho_fijo" else escribir_xml(spec, registros)
 
 
 def leer(spec: Especificacion, contenido: str):
+    if spec.formato == "delimitado":
+        return leer_delimitado(spec, contenido)
     return leer_txt(spec, contenido) if spec.formato == "ancho_fijo" else leer_xml(spec, contenido)

@@ -1,0 +1,3 @@
+[server]
+# el padrón mensual puede pesar varios cientos de MB
+maxUploadSize = 1024

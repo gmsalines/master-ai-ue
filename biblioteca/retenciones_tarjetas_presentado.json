@@ -1,0 +1,120 @@
+{
+ "nombre": "Retenciones sobre cobros con tarjeta — archivo presentado",
+ "version": "1.0",
+ "formato": "delimitado",
+ "separador_campos": ";",
+ "campos_ancho_fijo": true,
+ "separador_lineas": "CRLF",
+ "codificacion": "latin-1",
+ "tipos_registro": [
+  {
+   "codigo": "R",
+   "nombre": "Retención",
+   "min_ocurrencias": 1,
+   "max_ocurrencias": null,
+   "campos": [
+    {
+     "nombre": "identificador_fiscal",
+     "descripcion": "Identificador fiscal del sujeto retenido",
+     "tipo": "alfanumerico",
+     "longitud": 11,
+     "patron": "\\d{11}"
+    },
+    {
+     "nombre": "crc",
+     "descripcion": "Código de riesgo informado por el padrón",
+     "tipo": "numerico",
+     "longitud": 2
+    },
+    {
+     "nombre": "fecha_comprobante",
+     "descripcion": "Fecha del comprobante",
+     "tipo": "fecha",
+     "longitud": 10,
+     "formato_fecha": "DD/MM/AAAA"
+    },
+    {
+     "nombre": "fecha_retencion",
+     "descripcion": "Fecha de la retención",
+     "tipo": "fecha",
+     "longitud": 10,
+     "formato_fecha": "DD/MM/AAAA"
+    },
+    {
+     "nombre": "numero_comprobante",
+     "descripcion": "Número de comprobante",
+     "tipo": "numerico",
+     "longitud": 20
+    },
+    {
+     "nombre": "campo_06",
+     "descripcion": "Sin descripción en el material recibido (000001 en la muestra)",
+     "tipo": "numerico",
+     "longitud": 6
+    },
+    {
+     "nombre": "monto_sujeto_retencion",
+     "descripcion": "Monto sujeto a retención",
+     "tipo": "decimal",
+     "longitud": 20,
+     "decimales": 2
+    },
+    {
+     "nombre": "alicuota",
+     "descripcion": "Alícuota aplicada (%)",
+     "tipo": "decimal",
+     "longitud": 4,
+     "decimales": 2
+    },
+    {
+     "nombre": "monto_retenido",
+     "descripcion": "Monto retenido",
+     "tipo": "decimal",
+     "longitud": 20,
+     "decimales": 2
+    },
+    {
+     "nombre": "campo_10",
+     "descripcion": "Sin descripción en el material recibido (1, 4 o 5 en la muestra)",
+     "tipo": "numerico",
+     "longitud": 1
+    },
+    {
+     "nombre": "campo_11",
+     "descripcion": "Sin descripción en el material recibido (00 en la muestra)",
+     "tipo": "numerico",
+     "longitud": 2
+    },
+    {
+     "nombre": "jurisdiccion",
+     "descripcion": "Código de jurisdicción",
+     "tipo": "numerico",
+     "longitud": 3
+    }
+   ]
+  }
+ ],
+ "reglas": [
+  {
+   "id": "R1",
+   "descripcion": "Monto retenido = monto sujeto × alícuota / 100, redondeado a 2 decimales",
+   "ambito": "registro",
+   "tipo_registro": "R",
+   "expresion": "monto_retenido == redondear(monto_sujeto_retencion * alicuota / 100, 2)"
+  },
+  {
+   "id": "R2",
+   "descripcion": "El monto sujeto a retención es mayor que cero",
+   "ambito": "registro",
+   "tipo_registro": "R",
+   "expresion": "monto_sujeto_retencion > 0"
+  },
+  {
+   "id": "R3",
+   "descripcion": "La fecha de retención no es anterior a la del comprobante",
+   "ambito": "registro",
+   "tipo_registro": "R",
+   "expresion": "fecha_retencion >= fecha_comprobante"
+  }
+ ]
+}

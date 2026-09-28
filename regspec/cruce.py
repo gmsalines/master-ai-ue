@@ -30,18 +30,84 @@ from .dsl import Especificacion
 # ------------------------------------------------------------------ lectura
 
 
+def _decodificar(contenido: bytes, codificacion: str = "utf-8") -> str:
+    """Decodifica probando la codificación indicada y, si falla, latin-1 (nunca falla)."""
+    for cod in dict.fromkeys([codificacion, "utf-8-sig", "latin-1"]):
+        try:
+            return contenido.decode(cod)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return contenido.decode("latin-1")
+
+
+def _fila_encabezado(crudo: pd.DataFrame, max_filas: int = 15) -> int:
+    """Primera fila que parece encabezado: la que tiene más celdas de texto no vacías y distintas."""
+    mejor, puntaje = 0, -1.0
+    ancho = crudo.shape[1] or 1
+    for i in range(min(max_filas, len(crudo))):
+        fila = [str(v).strip() for v in crudo.iloc[i].tolist() if v is not None and str(v).strip() not in ("", "nan", "None")]
+        textos = [v for v in fila if not re.fullmatch(r"-?[\d.,/: -]+", v)]
+        p = len(set(textos)) / ancho
+        if p > puntaje + 0.2:  # la primera fila claramente mejor gana (evita elegir una fila de datos)
+            mejor, puntaje = i, p
+    return mejor
+
+
+def _celdas(df: pd.DataFrame) -> int:
+    return df.dropna(how="all").shape[0] * max(1, df.dropna(how="all", axis=1).shape[1])
+
+
+def hoja_por_defecto(contenido: bytes) -> str:
+    """La hoja con más datos (filas × columnas no vacías)."""
+    libro = pd.read_excel(io.BytesIO(contenido), sheet_name=None, header=None, dtype=str)
+    return max(libro, key=lambda h: _celdas(libro[h]))
+
+
+def leer_excel(contenido: bytes, hoja: Optional[str] = None) -> pd.DataFrame:
+    """Lee un Excel eligiendo la hoja con más datos y detectando la fila de encabezado."""
+    libro = pd.read_excel(io.BytesIO(contenido), sheet_name=None if hoja is None else [hoja], header=None, dtype=str)
+    if hoja is None:
+        hoja = max(libro, key=lambda h: _celdas(libro[h]))
+    crudo = libro[hoja]
+    h = _fila_encabezado(crudo)
+    nombres, vistos = [], {}
+    for i, v in enumerate(crudo.iloc[h].tolist()):
+        n = re.sub(r"\s+", " ", str(v)).strip() if v is not None and str(v) not in ("nan", "None") else f"columna_{i + 1}"
+        vistos[n] = vistos.get(n, 0) + 1
+        nombres.append(n if vistos[n] == 1 else f"{n} ({vistos[n]})")
+    df = crudo.iloc[h + 1:].copy()
+    df.columns = nombres
+    df = df.dropna(how="all").dropna(how="all", axis=1).reset_index(drop=True)
+    return df
+
+
+def hojas_excel(contenido: bytes) -> list[str]:
+    return pd.ExcelFile(io.BytesIO(contenido)).sheet_names
+
+
 def tabla_desde_archivo(contenido: bytes, nombre: str, spec: Optional[Especificacion] = None,
-                        tipo_registro: Optional[str] = None) -> pd.DataFrame:
-    """Convierte un archivo en tabla. TXT/XML requieren la especificación (y el tipo de registro a cruzar)."""
+                        tipo_registro: Optional[str] = None, hoja: Optional[str] = None) -> pd.DataFrame:
+    """Convierte un archivo en tabla. TXT/XML requieren la especificación (y el tipo de registro a cruzar).
+
+    Excel: se elige la hoja con más datos y se detecta la fila de encabezado.
+    TXT delimitado con un solo tipo de registro: lectura directa con pandas (rápida para archivos
+    de millones de líneas); la validación campo a campo queda para la pestaña «Validar archivo».
+    """
     ext = nombre.lower().rsplit(".", 1)[-1]
-    if ext in ("xlsx", "xls"):
-        return pd.read_excel(io.BytesIO(contenido), dtype=str)
+    if ext in ("xlsx", "xls", "xlsm"):
+        return leer_excel(contenido, hoja)
     if ext == "csv":
-        texto = contenido.decode("utf-8-sig", errors="replace")
+        texto = _decodificar(contenido)
         return pd.read_csv(io.StringIO(texto), dtype=str, sep=None, engine="python")
     if spec is None:
         raise ValueError(f"para leer '{nombre}' hace falta la especificación del formato")
-    texto = contenido.decode("utf-8", errors="replace")
+    if spec.formato == "delimitado" and len(spec.tipos_registro) == 1:
+        tr = spec.tipos_registro[0]
+        texto = _decodificar(contenido, spec.codificacion)
+        df = pd.read_csv(io.StringIO(texto), sep=spec.separador_campos or ";", header=None, dtype=str,
+                         names=[c.nombre for c in tr.campos], keep_default_na=False, quoting=3, engine="c")
+        return df.map(str.strip) if len(df) < 200_000 else df
+    texto = _decodificar(contenido, spec.codificacion)
     registros, _ = leer(spec, texto)
     if tipo_registro is None:  # por defecto, el tipo de registro repetible (el detalle)
         repetibles = [t.codigo for t in spec.tipos_registro if t.max_ocurrencias != 1]
@@ -248,12 +314,15 @@ def detectar_especificacion(contenido: bytes, nombre: str, specs: dict) -> Detec
     ext = nombre.lower().rsplit(".", 1)[-1]
     if ext in ("csv", "xlsx", "xls"):
         return Deteccion(None, None, None, 1.0, "tabla (CSV/Excel): no necesita especificación")
-    texto = contenido.decode("utf-8", errors="replace")
     mejor = Deteccion(None, None, None, 0.0, "ninguna especificación de la biblioteca lee este archivo")
     for n, spec in specs.items():
+        muestra = len(contenido) > 2_000_000 and spec.formato != "xml"  # archivos grandes: se prueban las primeras 500 líneas
+        texto = _decodificar(contenido[:200_000] if muestra else contenido, spec.codificacion)
         es_xml = texto.lstrip().startswith("<")
         if (spec.formato == "xml") != es_xml:
             continue
+        if muestra:
+            texto = "\n".join(texto.replace("\r\n", "\n").split("\n")[:500]) + "\n"
         try:
             regs, estructura = leer(spec, texto)
         except Exception:  # noqa: BLE001

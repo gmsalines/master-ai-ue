@@ -143,6 +143,9 @@ def describir_filtro(x) -> str:
     return f"{accion} {x.columna} {_(OPERADORES_TEXTO.get(x.operador, x.operador))} " + " | ".join(vals)
 
 
+GRANDE = 50_000     # filas a partir de las cuales el Excel se arma a pedido
+MOSTRAR = 5_000     # filas del cruce que se muestran en pantalla
+
 ss.setdefault("cfg", None)
 ss.setdefault("cfg_nombre", None)
 ss.setdefault("cfg_ver", 0)
@@ -246,20 +249,29 @@ with t2:
 with t3:
     from regspec.cruce import _decodificar, biblioteca_de_especificaciones as _biblio, detectar_especificacion as _detectar
 
+    @st.cache_resource(show_spinner=False, max_entries=8)
+    def validar_cacheado(firma: tuple, _contenido: bytes, _spec):
+        """Valida una sola vez por archivo y especificación (antes se repetía en cada clic de la app)."""
+        with st.spinner(_("Validando campo a campo y reglas…")):
+            return validar(_spec, _decodificar(_contenido, _spec.codificacion))
+
+    @st.cache_resource(show_spinner=False, max_entries=8)
+    def detectar_validar(firma: tuple, _contenido: bytes, nombre: str, nombres: tuple, _specs: dict):
+        return _detectar(_contenido, nombre, _specs)
+
     specs_v = _biblio(RAIZ / "especificaciones", RAIZ / "biblioteca", RAIZ / "gold")
     if ss.spec is not None:
         specs_v = {"(compilada en esta sesión)": ss.spec, **specs_v}
     arch = st.file_uploader(_("Archivo a validar"), type=["txt", "xml", "dat"], key="validar")
     if arch is not None:
-        det = _detectar(arch.getvalue(), arch.name, specs_v)
+        det = detectar_validar((arch.name, arch.size, getattr(arch, "file_id", "")), arch.getvalue(), arch.name, tuple(specs_v), specs_v)
         nombres_v = list(specs_v)
         idx = nombres_v.index(det.nombre_spec) if det.nombre_spec in nombres_v else 0
         if det.spec is not None:
             st.caption(_('Formato reconocido: {0} · {1}').format(det.nombre_spec, _(det.detalle)))
         elegido = st.selectbox(_("Especificación"), nombres_v, index=idx, key="spec_validar", format_func=_)
         spec = specs_v[elegido]
-        with st.spinner(_("Validando campo a campo y reglas…")):
-            inf = validar(spec, _decodificar(arch.getvalue(), spec.codificacion))
+        inf = validar_cacheado((arch.name, arch.size, getattr(arch, "file_id", ""), elegido), arch.getvalue(), spec)
         (st.success if inf.ok else st.error)(_(inf.resumen(0).splitlines()[0]))
         if inf.hallazgos:
             st.dataframe(_df(pd.DataFrame(inf.a_dicts())), hide_index=True, width="stretch")
@@ -333,18 +345,34 @@ with tc:
     biblioteca = biblioteca_de_especificaciones(BIBLIO, RAIZ / "biblioteca", RAIZ / "gold")
 
     @st.cache_resource(show_spinner="Reconociendo el formato…", max_entries=16)
-    def detectar_cacheado(contenido: bytes, nombre: str, nombres_specs: tuple, _biblio: dict):
-        return detectar_especificacion(contenido, nombre, _biblio)
+    def detectar_cacheado(firma: tuple, _contenido: bytes, nombre: str, nombres_specs: tuple, _biblio: dict):
+        return detectar_especificacion(_contenido, nombre, _biblio)
 
     @st.cache_resource(show_spinner="Leyendo el archivo…", max_entries=16)
-    def tabla_cacheada(contenido: bytes, nombre: str, spec_json: Optional[str], tipo: Optional[str], hoja: Optional[str]):
+    def tabla_cacheada(firma: tuple, _contenido: bytes, nombre: str, spec_json: Optional[str], tipo: Optional[str], hoja: Optional[str]):
         spec = Especificacion.model_validate_json(spec_json) if spec_json else None
-        return tabla_desde_archivo(contenido, nombre, spec, tipo, hoja)
+        return tabla_desde_archivo(_contenido, nombre, spec, tipo, hoja)
 
     @st.cache_resource(show_spinner=False, max_entries=16)
-    def hojas_cacheado(contenido: bytes):
+    def hojas_cacheado(firma: tuple, _contenido: bytes):
         from regspec.cruce import hoja_por_defecto, hojas_excel
-        return hojas_excel(contenido), hoja_por_defecto(contenido)
+        return hojas_excel(_contenido), hoja_por_defecto(_contenido)
+
+    def columnas_distintas(a: pd.DataFrame, b: pd.DataFrame) -> bool:
+        """True si dos tablas comparten menos de la mitad de sus columnas (no son el mismo tipo de archivo)."""
+        ca = {c for c in a.columns if not str(c).startswith("_")}
+        cb = {c for c in b.columns if not str(c).startswith("_")}
+        return len(ca & cb) / max(1, len(ca | cb)) < 0.5
+
+    def firma_de(f) -> tuple:
+        """Identifica un archivo subido sin recorrer su contenido (clave de caché instantánea aun para cientos de MB)."""
+        return (f.name, f.size, getattr(f, "file_id", ""))
+
+    @st.cache_resource(show_spinner=False, max_entries=64)
+    def valores_distintos(firma: tuple, columna: str, _serie: pd.Series) -> tuple[list, int]:
+        u = pd.unique(_serie.dropna().astype(str).str.strip())
+        u = [v for v in u if v]
+        return (sorted(u) if len(u) <= 500 else []), len(u)
     if ss.spec is not None:
         biblioteca["(compilada en esta sesión)"] = ss.spec
 
@@ -370,10 +398,10 @@ with tc:
     def leer_uno(f, lado: str, i: int, hoja_def: Optional[str] = None):
         if True:
             k = f"{lado}{i}"
-            det = detectar_cacheado(f.getvalue(), f.name, tuple(biblioteca), biblioteca)
+            det = detectar_cacheado(firma_de(f), f.getvalue(), f.name, tuple(biblioteca), biblioteca)
             spec_sel, tipo, hoja = det.spec, det.tipo_registro, None
             if f.name.lower().endswith((".xlsx", ".xls", ".xlsm")):
-                hojas, por_defecto = hojas_cacheado(f.getvalue())
+                hojas, por_defecto = hojas_cacheado(firma_de(f), f.getvalue())
                 if len(hojas) > 1:
                     hoja_ini = hoja_def if hoja_def in hojas else por_defecto
                     hoja = st.selectbox(_("Hoja"), hojas, index=hojas.index(hoja_ini), key=f"hoja_{k}_{V}",
@@ -424,7 +452,7 @@ with tc:
                             st.info(_("Podés revisarla y corregirla en la pestaña «Aprender un formato»."))
                 return None
             try:
-                df = tabla_cacheada(f.getvalue(), f.name, spec_sel.model_dump_json() if spec_sel is not None else None, tipo, hoja)
+                df = tabla_cacheada(firma_de(f), f.getvalue(), f.name, spec_sel.model_dump_json() if spec_sel is not None else None, tipo, hoja)
             except Exception as e:  # noqa: BLE001
                 st.error(_('No se pudo leer {0}: {1}').format(f.name, e))
                 return None
@@ -444,10 +472,10 @@ with tc:
     def tabla_silenciosa(f):
         """Lectura sin interfaz (para la sugerencia de llaves); None si el formato no se reconoce."""
         try:
-            det = detectar_cacheado(f.getvalue(), f.name, tuple(biblioteca), biblioteca)
+            det = detectar_cacheado(firma_de(f), f.getvalue(), f.name, tuple(biblioteca), biblioteca)
             if not f.name.lower().endswith((".csv", ".xlsx", ".xls", ".xlsm")) and (det.spec is None or det.confianza < 0.9):
                 return None
-            return tabla_cacheada(f.getvalue(), f.name, det.spec.model_dump_json() if det.spec is not None else None,
+            return tabla_cacheada(firma_de(f), f.getvalue(), f.name, det.spec.model_dump_json() if det.spec is not None else None,
                                   det.tipo_registro, None)
         except Exception:  # noqa: BLE001
             return None
@@ -474,9 +502,16 @@ with tc:
             nombre_g = c_nom.text_input(_("Nombre del grupo"), gcfg.nombre if gcfg else _("Grupo {0}").format(gi + 1), key=f"gnom_{gi}_{V}_{ss.idioma}")
             archivos = st.file_uploader(_('Archivos de «{0}» (uno o varios)').format(nombre_g), type=["csv", "xlsx", "xls", "txt", "xml", "dat"],
                                         accept_multiple_files=True, key=f"gfiles_{gi}")
-            modo_ini = list(MODOS).index(gcfg.modo) if gcfg and gcfg.modo in MODOS else 0
-            modo_g = c_modo.selectbox(_("Cómo combinar los archivos del grupo"), list(MODOS), format_func=lambda k: _(MODOS[k]), index=modo_ini,
-                                      key=f"gmodo_{gi}_{V}", disabled=not archivos or len(archivos) < 2)
+            # por defecto: si los archivos del grupo tienen columnas distintas (p. ej. retenciones + padrón), base + referencia
+            tablas_g = [d for g_, _f, d in leidas if g_ == gi]
+            modo_def = "concatenar"
+            if len(tablas_g) > 1 and any(columnas_distintas(tablas_g[0], d) for d in tablas_g[1:]):
+                modo_def = "base_referencia"
+            if gcfg and gcfg.modo in MODOS:
+                modo_def = gcfg.modo
+            modo_g = c_modo.selectbox(_("Cómo combinar los archivos del grupo"), list(MODOS), format_func=lambda k: _(MODOS[k]),
+                                      index=list(MODOS).index(modo_def), key=f"gmodo_{gi}_{V}_{modo_def}",
+                                      disabled=not archivos or len(archivos) < 2)
             if not archivos:
                 grupos_ui.append(None)
                 continue
@@ -533,10 +568,9 @@ with tc:
                                             key=f"fop_{fk}")
                         valores, fval = [], ""
                         if fop in OPERADORES_MULTIVALOR:
-                            distintos = pd.unique(df[fcol].dropna().astype(str).str.strip())
-                            distintos = sorted(v for v in distintos if v)
+                            distintos, n_distintos = valores_distintos(firma_de(f), fcol, df[fcol])
                             previos_v = (f0.lista() if hasattr(f0, "lista") else (f0.valores or ([f0.valor] if f0.valor else []))) if f0 else []
-                            if fop != "contiene" and len(distintos) <= 500:
+                            if fop != "contiene" and distintos:
                                 valores = fc3.multiselect(_("Valores"), distintos, default=[v for v in previos_v if v in distintos],
                                                           placeholder=_("Elegí uno o varios valores"), key=f"fvals_{fk}",
                                                           help=_("Se toman las filas que coinciden con cualquiera de los valores elegidos."))
@@ -565,6 +599,10 @@ with tc:
                 continue
             cols_g = sorted({c for a in arch_objs for c in a.df.columns if not c.startswith("_")} |
                             {c for a in arch_objs for c in a.traer})
+            if modo_g == "concatenar" and len(arch_objs) > 1:
+                if any(columnas_distintas(arch_objs[0].df, a.df) for a in arch_objs[1:]):
+                    st.warning(_("Los archivos de «{0}» tienen columnas distintas y se van a concatenar (sumar sus filas). "
+                                 "Si uno es un padrón o tabla de referencia, elegí «Base + referencia» en «Cómo combinar los archivos del grupo».").format(nombre_g))
             grupos_ui.append((nombre_g, arch_objs, modo_g, cols_g))
     b1, b2, _hueco = st.columns([1, 1, 3])
     if b1.button(_("➕ Agregar grupo")):
@@ -605,7 +643,9 @@ with tc:
             grupos = [Grupo(nom, arch, modo, []) for nom, arch, modo, _ in listos]
             with st.spinner(_("Cruzando…")):
                 ss.res_grupos = cruzar_grupos(grupos, comparaciones, Decimal(str(tol)))
-                ss.res_excel = ss.res_grupos.a_excel()
+                rg = ss.res_grupos
+                grande = max([len(rg.matriz), *[len(d) for d in rg.detalles.values()]]) > GRANDE
+                ss.res_excel = None if grande else rg.a_excel()  # los resultados grandes se exportan a pedido
             ss.cfg_actual = ConfigCruce(
                 grupos=[GrupoCfg(nombre=nom, modo=modo, archivos=[
                     ArchivoCfg(nombre_original=a.nombre, llave=a.llave, transformacion=a.transformacion,
@@ -632,10 +672,19 @@ with tc:
             estados = ["(todos)"] + sorted(r.matriz["estado"].unique())
             ver = st.selectbox(_("Ver llaves"), estados, key="ver_estado", format_func=_)
             m = r.matriz if ver == "(todos)" else r.matriz[r.matriz["estado"] == ver]
-            vista = m.map(lambda v: "✔" if v is True else ("" if v is False else v)).astype(str).replace({"None": "", "nan": ""})
+            if len(m) > MOSTRAR:
+                st.caption(_("Se muestran las primeras {0} de {1} llaves; el Excel tiene el detalle.").format(
+                    f"{MOSTRAR:,}".replace(",", "."), f"{len(m):,}".replace(",", ".")))
+            vista = m.head(MOSTRAR).map(lambda v: "✔" if v is True else ("" if v is False else v)).astype(str).replace({"None": "", "nan": ""})
             st.dataframe(_df(vista), hide_index=True, width="stretch")
-            excel = ss.get("res_excel") or r.a_excel()
-            st.download_button(_("Descargar resultado (Excel)"), excel, "conciliacion.xlsx")
+            excel = ss.get("res_excel")
+            if excel is None:
+                st.caption(_("El resultado es grande: el Excel se arma a pedido (puede tardar un minuto) y cada hoja se limita a 200.000 filas."))
+                if st.button(_("Preparar Excel"), key="preparar_excel"):
+                    with st.spinner(_("Armando el Excel…")):
+                        ss.res_excel = excel = r.a_excel()
+            if excel is not None:
+                st.download_button(_("Descargar resultado (Excel)"), excel, "conciliacion.xlsx")
             if ss.get("cfg_actual") is not None:
                 with st.expander(_("💾 Guardar este cruce"), expanded=False):
                     st.caption(_("Se guardan la configuración (para repetirla con los archivos del próximo período) y el resultado."))
@@ -643,6 +692,9 @@ with tc:
                     nombre_c = st.text_input(_("Nombre del cruce"), nom_def, key=f"nom_guardar_{V}")
                     notas = st.text_area(_("Notas (opcional)"), key=f"notas_guardar_{V}")
                     if st.button(_("Guardar"), type="primary", key="btn_guardar"):
+                        if excel is None:
+                            with st.spinner(_("Armando el Excel…")):
+                                ss.res_excel = excel = r.a_excel()
                         g = almacen.guardar(nombre_c, ss.cfg_actual, r.resumen, ss.get("archivos_actual", []), excel,
                                             usuario_actual(), notas)
                         st.success(_('Guardado «{0}». Lo encontrás en la pestaña «Mis cruces» y arriba, en «Partir de un cruce guardado».').format(g.nombre))

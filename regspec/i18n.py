@@ -188,6 +188,13 @@ PT: dict[str, str] = {
     "Ver llaves": "Ver chaves",
     "(todos)": "(todos)",
     "Descargar resultado (Excel)": "Baixar resultado (Excel)",
+    "Se muestran las primeras {0} de {1} llaves; el Excel tiene el detalle.": "São mostradas as primeiras {0} de {1} chaves; o Excel tem o detalhe.",
+    "El resultado es grande: el Excel se arma a pedido (puede tardar un minuto) y cada hoja se limita a 200.000 filas.":
+        "O resultado é grande: o Excel é montado sob demanda (pode levar um minuto) e cada planilha é limitada a 200.000 linhas.",
+    "Preparar Excel": "Preparar Excel",
+    "Armando el Excel…": "Montando o Excel…",
+    "Los archivos de «{0}» tienen columnas distintas y se van a concatenar (sumar sus filas). Si uno es un padrón o tabla de referencia, elegí «Base + referencia» en «Cómo combinar los archivos del grupo».":
+        "Os arquivos de «{0}» têm colunas diferentes e serão concatenados (somando suas linhas). Se um deles é um cadastro ou tabela de referência, escolha «Base + referência» em «Como combinar os arquivos do grupo».",
     "💾 Guardar este cruce": "💾 Salvar este cruzamento",
     "Se guardan la configuración (para repetirla con los archivos del próximo período) y el resultado.":
         "São salvos a configuração (para repeti-la com os arquivos do próximo período) e o resultado.",

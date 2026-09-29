@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 
 TRANSFORMACIONES = {
@@ -77,6 +78,25 @@ def numero(v) -> Optional[Decimal]:
         return None
 
 
+def serie_numerica(s: pd.Series) -> pd.Series:
+    """Versión vectorizada de `numero` (float; NaN si no es numérico). Acepta 1.234,56 · 1,234.56 · 12,5 · $ 100."""
+    t = s.astype("string").str.strip().str.replace(r"[\s$]", "", regex=True)
+    coma, punto = t.str.contains(",", regex=False), t.str.contains(".", regex=False)
+    coma_ultima = t.str.rfind(",") > t.str.rfind(".")
+    a = t.mask(coma & punto & coma_ultima, t.str.replace(".", "", regex=False).str.replace(",", ".", regex=False))
+    a = a.mask(coma & punto & ~coma_ultima, t.str.replace(",", "", regex=False))
+    a = a.mask(coma & ~punto, t.str.replace(",", ".", regex=False))
+    # sin ceros a la izquierda: pandas pierde los decimales en textos como "000000000000000280.38"
+    a = a.str.replace(r"^([+-]?)0+(?=\d)", r"\1", regex=True)
+    return pd.to_numeric(a, errors="coerce").astype(float)
+
+
+def formatear_numero(v) -> str:
+    if v is None or (isinstance(v, float) and v != v):
+        return ""
+    return (f"{float(v):.6f}").rstrip("0").rstrip(".")
+
+
 def transformar_serie(s: pd.Series, tipo: str) -> pd.Series:
     """Versión vectorizada de `transformar` (mismo resultado, apta para millones de filas)."""
     t = s.astype("string").fillna("").str.strip()
@@ -125,15 +145,16 @@ class Filtro:
             return m
         if self.operador in ("==", "!="):
             nums = [numero(v) for v in vals]
-            if vals and all(n is not None for n in nums) and col.map(numero).notna().any():
-                en = col.map(numero).isin(nums)  # 100 == 100.00
+            col_num = serie_numerica(col) if vals and all(n is not None for n in nums) else None
+            if col_num is not None and col_num.notna().any():
+                en = col_num.isin([float(n) for n in nums])  # 100 == 100.00
             else:
                 en = s.isin(vals)
             return en if self.operador == "==" else ~en
         vn = numero(vals[0]) if vals else None
         if vn is None:
             return pd.Series(False, index=df.index)
-        nums = col.map(numero)
+        nums, vn = serie_numerica(col), float(vn)
         ops = {">": nums > vn, ">=": nums >= vn, "<": nums < vn, "<=": nums <= vn}
         return ops[self.operador].fillna(False).astype(bool)
 
@@ -202,10 +223,12 @@ class Grupo:
 
     def por_llave(self, detalle: pd.DataFrame) -> pd.DataFrame:
         """Una fila por llave: suma de importes, cantidad de filas y primeros valores del resto."""
-        agg = {c: (lambda s: sum((numero(x) or Decimal(0)) for x in s)) for c in self.importes if c in detalle.columns}
-        otros = [c for c in detalle.columns if c not in agg and c != "_llave"]
+        importes = [c for c in self.importes if c in detalle.columns]
+        otros = [c for c in detalle.columns if c not in importes and c != "_llave"]
         g = detalle.groupby("_llave", sort=False)
-        out = g.agg({**agg, **{c: "first" for c in otros}}) if (agg or otros) else g.size().to_frame("_n")
+        out = g[otros].first() if otros else pd.DataFrame(index=g.size().index)
+        for c in importes:  # vectorizado: millones de filas en segundos
+            out[c] = serie_numerica(detalle[c]).fillna(0.0).groupby(detalle["_llave"], sort=False).sum().round(6)
         out["_filas"] = g.size()
         return out
 
@@ -218,16 +241,28 @@ class ResultadoGrupos:
     estadisticas: dict
     detalles: dict                # nombre de grupo -> detalle
 
-    def a_excel(self) -> bytes:
+    def a_excel(self, max_filas: int = 200_000) -> bytes:
+        """Excel del resultado. Cada hoja se limita a `max_filas` (Excel admite ~1 millón y escribir más es muy lento);
+        si se recorta, se indica en la hoja Resumen."""
         buf = io.BytesIO()
+        recortes = []
+
+        def hoja(df, nombre):
+            if len(df) > max_filas:
+                recortes.append({"indicador": f"hoja «{nombre}» recortada", "valor": f"primeras {max_filas} de {len(df)} filas"})
+                df = df.head(max_filas)
+            _excel_safe(df).to_excel(xw, sheet_name=nombre[:31], index=False)
+
         with pd.ExcelWriter(buf, engine="openpyxl") as xw:
-            pd.DataFrame([{"indicador": k, "valor": str(v)} for k, v in self.resumen.items()]).to_excel(xw, sheet_name="Resumen", index=False)
             filas = [{"grupo": g, "indicador": k, "valor": str(v)} for g, st in self.estadisticas.items() for k, v in st.items()]
             pd.DataFrame(filas).to_excel(xw, sheet_name="Grupos", index=False)
-            _excel_safe(self.matriz).to_excel(xw, sheet_name="Cruce por llave", index=False)
-            _excel_safe(self.diferencias).to_excel(xw, sheet_name="Diferencias", index=False)
+            hoja(self.matriz, "Cruce por llave")
+            hoja(self.diferencias, "Diferencias")
             for g, d in self.detalles.items():
-                _excel_safe(d).to_excel(xw, sheet_name=f"Detalle {g}"[:31], index=False)
+                hoja(d, f"Detalle {g}")
+            resumen = [{"indicador": k, "valor": str(v)} for k, v in self.resumen.items()] + recortes
+            pd.DataFrame(resumen).to_excel(xw, sheet_name="Resumen", index=False)
+            xw.book.move_sheet("Resumen", offset=-len(xw.book.sheetnames) + 1)
         return buf.getvalue()
 
 
@@ -248,7 +283,8 @@ def cruzar_grupos(grupos: list[Grupo], comparar: list[tuple[str, ...]] = (), tol
         g_imp = set(g.importes) | {t[i] for t in comparar for i, gg in enumerate(grupos) if gg is g and i < len(t)}
         g.importes = [c for c in g_imp if c in det.columns]
         por[g.nombre] = g.por_llave(det)
-    universo = pd.Index(sorted(set().union(*[set(p.index) for p in por.values()])), name="llave")
+    universo = pd.Index(pd.unique(np.concatenate([p.index.to_numpy(dtype=object) for p in por.values()]))).sort_values()
+    universo.name = "llave"
     m = pd.DataFrame(index=universo)
     for g in grupos:
         m[f"en {g.nombre}"] = universo.isin(por[g.nombre].index)
@@ -259,21 +295,33 @@ def cruzar_grupos(grupos: list[Grupo], comparar: list[tuple[str, ...]] = (), tol
                 m[f"{g.nombre}.{t[i]}"] = por[g.nombre][t[i]].reindex(universo)
     presencia = m[[f"en {g.nombre}" for g in grupos]]
     m["en todos"] = presencia.all(axis=1)
-    m["estado"] = presencia.apply(lambda f: "en todos" if f.all() else "solo en " + " + ".join(
-        c.removeprefix("en ") for c, v in f.items() if v), axis=1)
+    # estado vectorizado: cada combinación de presencia es un código binario
+    pres = presencia.to_numpy(dtype=bool)
+    codigos = pres.astype(np.int64) @ (1 << np.arange(len(grupos), dtype=np.int64))
+    etiquetas = {}
+    for c in np.unique(codigos):
+        nombres_c = [g.nombre for i, g in enumerate(grupos) if (int(c) >> i) & 1]
+        etiquetas[int(c)] = "en todos" if len(nombres_c) == len(grupos) else "solo en " + " + ".join(nombres_c)
+    m["estado"] = pd.Series(codigos, index=m.index).map(etiquetas)
 
-    difs = []
-    for llave, fila in m[m["en todos"]].iterrows():
-        textos = []
-        for t in comparar:
-            vals = [fila.get(f"{g.nombre}.{t[i]}") for i, g in enumerate(grupos) if i < len(t)]
-            vals = [v for v in vals if v is not None and not (isinstance(v, float) and v != v)]
-            if len(vals) >= 2 and max(vals) - min(vals) > tolerancia:
-                textos.append(" vs ".join(f"{g.nombre}.{t[i]}={fila.get(f'{g.nombre}.{t[i]}')}" for i, g in enumerate(grupos) if i < len(t))
-                              + f" (dif. {max(vals) - min(vals)})")
-        if textos:
-            difs.append({"llave": llave, "diferencias": "; ".join(textos)})
-    m["con diferencias"] = m.index.isin([d["llave"] for d in difs])
+    tol = float(tolerancia)
+    textos: dict = {}
+    en_todos = m["en todos"].to_numpy()
+    for t in comparar:
+        cols = [(g.nombre, t[i], f"{g.nombre}.{t[i]}") for i, g in enumerate(grupos) if i < len(t) and f"{g.nombre}.{t[i]}" in m.columns]
+        if len(cols) < 2:
+            continue
+        arr = m[[c for _, _, c in cols]].to_numpy(dtype=float)
+        validos = (~np.isnan(arr)).sum(axis=1) >= 2
+        with np.errstate(all="ignore"):
+            dif = np.round(np.nanmax(arr, axis=1) - np.nanmin(arr, axis=1), 6)
+        malas = np.flatnonzero(en_todos & validos & (dif > tol + 1e-9))
+        for k in malas:
+            texto = " vs ".join(f"{g}.{c}={formatear_numero(arr[k, j])}" for j, (g, c, _) in enumerate(cols)) + \
+                f" (dif. {formatear_numero(dif[k])})"
+            textos.setdefault(m.index[k], []).append(texto)
+    difs = [{"llave": k, "diferencias": "; ".join(v)} for k, v in sorted(textos.items())]
+    m["con diferencias"] = m.index.isin(list(textos))
     matriz = m.reset_index()
     resumen = {"llaves en el universo": len(universo), "en todos los grupos": int(m["en todos"].sum()),
                "en todos, con diferencias": len(difs), "en todos, iguales": int(m["en todos"].sum()) - len(difs),
@@ -283,7 +331,7 @@ def cruzar_grupos(grupos: list[Grupo], comparar: list[tuple[str, ...]] = (), tol
         resumen[f"solo en {g.nombre}"] = int(solo.sum())
         resumen[f"cobertura de {g.nombre} (llaves presentes en todos los demás)"] = (
             f"{int(m.loc[presencia[f'en {g.nombre}'], 'en todos'].sum())} de {int(presencia[f'en {g.nombre}'].sum())}")
-    return ResultadoGrupos(matriz, pd.DataFrame(difs), resumen, estad, detalles)
+    return ResultadoGrupos(matriz, pd.DataFrame(difs, columns=["llave", "diferencias"]), resumen, estad, detalles)
 
 
 # ------------------------------------------------------------------ sugerencia de llaves (sin IA)

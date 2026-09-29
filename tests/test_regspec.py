@@ -623,3 +623,12 @@ def test_filtros_incluir_excluir_y_varios_valores():
     assert ids(Filtro("monto", "<=", "0"), Filtro("leyenda", "vacío"))[0] == ["1", "4"]
     # compatibilidad: Filtro(columna, operador, valor) sigue siendo "excluir"
     assert ids(Filtro("monto", "<=", "0"))[0] == ["1", "4", "5"]
+
+
+def test_serie_numerica_equivale_a_numero():
+    from regspec.grupos import numero, serie_numerica
+    vals = ["000000000000000280.38", "000000000000001225.00", "1.234,56", "1,234.56", "12,5", "$ 100", None, "abc", "-5",
+            "-000012.50", "0", "00", "0.5", "7743620.01"]
+    got = serie_numerica(pd.Series(vals)).tolist()
+    exp = [float(numero(v)) if numero(v) is not None else None for v in vals]
+    assert all((g != g and e is None) or abs(g - e) < 1e-9 for g, e in zip(got, exp)), (got, exp)

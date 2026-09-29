@@ -53,7 +53,7 @@ regspec/
   base_sin_ia.py    línea base: parser convencional por reglas (sin IA); también primer paso del modo híbrido
   cruce.py          lectura de archivos, detección de formato y cruce de 2 tablas
   grupos.py         conciliación N-way por grupos de archivos con llaves (flujo 2, sin IA)
-  almacen.py        cruces guardados: configuración reutilizable + resultado
+  almacen.py        cruces guardados, memoria de configuración y formatos (local o Supabase)
   i18n.py           textos de la interfaz en español y portugués
   llm/              proveedores desacoplados, prompts, extractor con bucle
   evaluacion/       batería de mutaciones, métricas, banco de evaluación
@@ -122,9 +122,12 @@ Proveedores soportados: `groq`, `openai`, `openrouter`, `ollama` (local, sin cla
 
 ## Publicar la demo (Streamlit Cloud, gratis)
 
-1. Entrá a share.streamlit.io con tu cuenta de GitHub y elegí **New app**: repositorio `gmsalines/master-ai-ue`, rama `main`, archivo `app.py`.
-2. En **Advanced settings → Secrets**, pegá `GROQ_API_KEY = "gsk_..."` (ver `.streamlit/secrets.toml.ejemplo`).
-3. **Deploy.** La app toma la clave de los *Secrets*: quien la use no necesita cargarla.
+1. Entrá a share.streamlit.io con tu cuenta de GitHub y elegí **Create app → Deploy a public app from GitHub**: repositorio `gmsalines/master-ai-ue`, rama `siguiente-paso`, archivo `app.py`.
+2. En **Advanced settings → Secrets**, pegá `GROQ_API_KEY`, `SUPABASE_URL` y `SUPABASE_ANON_KEY` (ver `.streamlit/secrets.toml.ejemplo`).
+3. **Deploy.** Los usuarios entran con su mail y contraseña; la clave de IA la toma de los *Secrets*.
+
+Límite a tener en cuenta: el plan gratuito de Streamlit Cloud tiene poca memoria; archivos de referencia de cientos de MB
+(por ejemplo, un padrón de millones de filas) conviene recortarlos a las columnas necesarias antes de subirlos.
 
 ## Corpus de evaluación
 
@@ -217,6 +220,22 @@ Lectura de la línea base: el parser convencional resuelve bien una tabla limpia
 - El período siguiente se elige el cruce en «Partir de un cruce guardado» (o «Reutilizar configuración» en la pestaña «Mis cruces»): la configuración se aplica a los archivos nuevos por posición (grupo y orden dentro del grupo) y avisa si falta alguna columna.
 - El almacenamiento está detrás de la interfaz `Almacen`; para la versión publicada con usuarios se reemplaza `AlmacenLocal` por una base de datos.
 - La interfaz está en **español y portugués** (selector 🌐 en la barra lateral; por defecto, el idioma del navegador). Los textos se escriben en español con `_()` y `regspec/i18n.py` tiene las traducciones, incluidos los mensajes de validación. Un test verifica que todo texto de la app tenga traducción.
+
+## Usuarios y memoria de configuración (Supabase)
+
+Con `SUPABASE_URL` y `SUPABASE_ANON_KEY` en los secrets, la app pide **mail y contraseña** y cada usuario trabaja en su
+espacio de trabajo (permisos por fila en la base):
+
+- `conciliacion`: cruces guardados (configuración, resumen, archivos, origen de la sugerencia y si se aceptó); el Excel
+  va al bucket `resultados/<usuario>/`.
+- `memoria_conciliacion`: **memoria de configuración y aprendizaje por uso**. Cada cruce se recuerda asociado a la firma
+  de los archivos (sus columnas por grupo, no sus nombres). Cuando el usuario sube archivos con la misma estructura, la
+  app ofrece «Usar la configuración aprendida». Se registran `veces_usado`, `veces_corregido` (si el usuario la cambió)
+  y una `confianza` que sube con el uso sin cambios y baja con las correcciones.
+- `especificacion`: formatos aprendidos por la IA, por espacio de trabajo (en la nube el disco no persiste).
+- `perfil.idioma`: la app abre en el idioma del usuario y recuerda el que elija.
+
+Sin esas claves, todo funciona en modo local (sin login) y la memoria se guarda en `cruces_guardados/memoria.json`.
 
 ## Limitaciones y líneas futuras
 

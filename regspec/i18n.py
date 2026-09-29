@@ -205,6 +205,22 @@ PT: dict[str, str] = {
         "Salvo «{0}». Você o encontra na aba «Meus cruzamentos» e acima, em «Partir de um cruzamento salvo».",
     "Para probar: Grupo 1 = ejemplos/grupos/g1_retenciones_sistema.csv + g1_padron_referencia.csv (modo base + referencia) · Grupo 2 = ejemplos/grupos/g2_reporte_agente.csv":
         "Para testar: Grupo 1 = ejemplos/grupos/g1_retenciones_sistema.csv + g1_padron_referencia.csv (modo base + referência) · Grupo 2 = ejemplos/grupos/g2_reporte_agente.csv",
+    # acceso y memoria
+    "Entrar": "Entrar",
+    "Mail": "E-mail",
+    "Contraseña": "Senha",
+    "Salir": "Sair",
+    "Mail o contraseña incorrectos.": "E-mail ou senha incorretos.",
+    "No se pudo entrar": "Não foi possível entrar",
+    "Tu usuario no tiene un espacio de trabajo asignado. Pedile acceso a la administradora.":
+        "Seu usuário não tem um espaço de trabalho atribuído. Peça acesso à administradora.",
+    "No se pudo guardar el formato en la cuenta": "Não foi possível salvar o formato na conta",
+    "🧠 **Ya cruzaste archivos con esta misma estructura** ({0} veces, confianza {1}%).":
+        "🧠 **Você já cruzou arquivos com esta mesma estrutura** ({0} vezes, confiança {1}%).",
+    "Usar la configuración aprendida": "Usar a configuração aprendida",
+    "Configurar a mano": "Configurar manualmente",
+    "configuración aprendida": "configuração aprendida",
+    "No se pudo actualizar la memoria de configuración": "Não foi possível atualizar a memória de configuração",
     # mis cruces
     "Todavía no hay cruces guardados. Después de cruzar, usá «💾 Guardar este cruce».":
         "Ainda não há cruzamentos salvos. Depois de cruzar, use «💾 Salvar este cruzamento».",

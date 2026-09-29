@@ -42,6 +42,8 @@ def _idioma_inicial() -> str:
 
 
 ss.setdefault("idioma", _idioma_inicial())
+if "idioma_pendiente" in ss:  # idioma del perfil, al entrar
+    ss.idioma = ss.pop("idioma_pendiente")
 
 
 def _(texto):
@@ -58,8 +60,65 @@ ss.setdefault("manual", "")
 ss.setdefault("iteraciones", [])
 
 # ---------------------------------------------------------------- barra lateral
+# ---------------------------------------------------------------- acceso (solo si la app tiene Supabase configurado)
+def _config_supabase():
+    try:
+        url, key = st.secrets.get("SUPABASE_URL", ""), st.secrets.get("SUPABASE_ANON_KEY", "")
+    except Exception:  # noqa: BLE001 (sin archivo de secrets)
+        url = key = ""
+    return url or os.environ.get("SUPABASE_URL", ""), key or os.environ.get("SUPABASE_ANON_KEY", "")
+
+
+SB_URL, SB_KEY = _config_supabase()
+if SB_URL and SB_KEY and not ss.get("sesion"):
+    _c1, _c2, _c3 = st.columns([1, 1.2, 1])
+    with _c2:
+        st.selectbox("🌐 Idioma", list(IDIOMAS), format_func=IDIOMAS.get, key="idioma")
+        st.title(_("Conciliación de archivos regulatorios"))
+        with st.form("login"):
+            st.subheader(_("Entrar"))
+            email = st.text_input(_("Mail"))
+            clave_login = st.text_input(_("Contraseña"), type="password")
+            entrar = st.form_submit_button(_("Entrar"), type="primary", use_container_width=True)
+        if entrar:
+            from supabase import create_client
+            try:
+                cli = create_client(SB_URL, SB_KEY)
+                resp = cli.auth.sign_in_with_password({"email": email.strip(), "password": clave_login})
+                perfil = cli.table("perfil").select("*").eq("id", resp.user.id).execute().data
+                if not perfil or not perfil[0].get("workspace_id"):
+                    st.error(_("Tu usuario no tiene un espacio de trabajo asignado. Pedile acceso a la administradora."))
+                else:
+                    ss.sb = cli
+                    ss.sesion = {"id": resp.user.id, "email": resp.user.email, "nombre": perfil[0].get("nombre") or "",
+                                 "workspace_id": perfil[0]["workspace_id"], "idioma": perfil[0].get("idioma") or "es"}
+                    if ss.sesion["idioma"] in IDIOMAS:
+                        ss.idioma_pendiente = ss.sesion["idioma"]  # se aplica al recargar (el selector ya existe)
+                    st.rerun()
+            except Exception as e:  # noqa: BLE001
+                st.error(_("Mail o contraseña incorrectos.") if "Invalid login" in str(e) else f"{_('No se pudo entrar')}: {e}")
+    st.stop()
+
 with st.sidebar:
     st.selectbox("🌐 Idioma", list(IDIOMAS), format_func=IDIOMAS.get, key="idioma")
+    if ss.get("sesion"):
+        st.caption(f"👤 {ss.sesion['nombre'] or ss.sesion['email']} · {ss.sesion['email']}")
+        if ss.idioma != ss.sesion.get("idioma"):  # recordar el idioma elegido en el perfil
+            try:
+                ss.sb.table("perfil").update({"idioma": ss.idioma}).eq("id", ss.sesion["id"]).execute()
+                ss.sesion["idioma"] = ss.idioma
+            except Exception:  # noqa: BLE001
+                pass
+        if st.button(_("Salir")):
+            try:
+                ss.sb.auth.sign_out()
+            except Exception:  # noqa: BLE001
+                pass
+            for k in list(ss.keys()):
+                if k != "idioma":
+                    del ss[k]
+            st.rerun()
+        st.divider()
     st.header(_("Modelo"))
     opcion = st.selectbox(_("Proveedor"), ["groq", "gemini", "openai", "openrouter", "ollama", "anthropic", "sin IA (línea base)"],
                           format_func=_)
@@ -109,15 +168,47 @@ def guardar_en_biblioteca(spec: Especificacion, nombre: str) -> str:
     BIBLIO.mkdir(exist_ok=True)
     slug = _re.sub(r"[^a-z0-9]+", "_", nombre.lower()).strip("_")[:50] or "especificacion"
     (BIBLIO / f"{slug}.json").write_text(spec.model_dump_json(indent=2), encoding="utf-8")
+    alm = globals().get("almacen")
+    if alm is not None and alm.remoto:  # en la nube el disco no persiste: el formato queda en la cuenta del usuario
+        try:
+            alm.guardar_formato(slug, json.loads(spec.model_dump_json()), "ia" if globals().get("proveedor") is not None else "parser")
+            ss.pop("formatos_cache", None)
+        except Exception as e:  # noqa: BLE001
+            st.warning(f"{_('No se pudo guardar el formato en la cuenta')}: {e}")
     return slug
 
 from regspec.almacen import AlmacenLocal, ArchivoCfg, ConfigCruce, FiltroCfg, GrupoCfg
 
-almacen = AlmacenLocal(RAIZ / "cruces_guardados")
+from regspec.almacen import AlmacenSupabase, config_equivalente, firma_archivos  # noqa: E402
+
+if ss.get("sesion"):
+    almacen = AlmacenSupabase(ss.sb, ss.sesion["id"], ss.sesion["workspace_id"], ss.sesion["email"])
+else:
+    almacen = AlmacenLocal(RAIZ / "cruces_guardados")
+
+
+def formatos_del_usuario() -> dict:
+    """Formatos aprendidos guardados en la cuenta (en la nube); vacío en modo local."""
+    if not almacen.remoto:
+        return {}
+    if "formatos_cache" not in ss:
+        out = {}
+        try:
+            for n, d in almacen.formatos().items():
+                try:
+                    out[n] = Especificacion.model_validate(d)
+                except Exception:  # noqa: BLE001
+                    continue
+        except Exception:  # noqa: BLE001
+            pass
+        ss.formatos_cache = out
+    return ss.formatos_cache
 
 
 def usuario_actual() -> str:
-    """Mail del usuario si la app corre con login (Streamlit); si no, 'local'."""
+    """Mail del usuario conectado; si no hay login, 'local'."""
+    if ss.get("sesion"):
+        return ss.sesion["email"]
     try:
         u = getattr(st, "user", None)
         mail = u.get("email") if u is not None else None
@@ -126,10 +217,13 @@ def usuario_actual() -> str:
         return "local"
 
 
-def aplicar_config(cruce) -> None:
-    """Deja lista una configuración guardada para aplicarla a los archivos que se suban."""
+def aplicar_config(cruce, origen: str = "memoria", memoria_id: Optional[str] = None) -> None:
+    """Deja lista una configuración guardada (o aprendida) para aplicarla a los archivos que se suban."""
     ss.cfg = cruce.config if cruce is not None else None
     ss.cfg_nombre = cruce.nombre if cruce is not None else None
+    ss.origen = origen if cruce is not None else "heuristica"
+    ss.memoria_cfg = cruce.config if cruce is not None else None
+    ss.memoria_id = memoria_id
     if cruce is not None:
         ss.n_grupos = max(2, len(cruce.config.grupos))
     ss.cfg_ver = ss.get("cfg_ver", 0) + 1
@@ -259,7 +353,7 @@ with t3:
     def detectar_validar(firma: tuple, _contenido: bytes, nombre: str, nombres: tuple, _specs: dict):
         return _detectar(_contenido, nombre, _specs)
 
-    specs_v = _biblio(RAIZ / "especificaciones", RAIZ / "biblioteca", RAIZ / "gold")
+    specs_v = {**_biblio(RAIZ / "especificaciones", RAIZ / "biblioteca", RAIZ / "gold"), **formatos_del_usuario()}
     if ss.spec is not None:
         specs_v = {"(compilada en esta sesión)": ss.spec, **specs_v}
     arch = st.file_uploader(_("Archivo a validar"), type=["txt", "xml", "dat"], key="validar")
@@ -342,7 +436,7 @@ with tc:
     )
     from regspec.llm.cache import ProveedorConCache
 
-    biblioteca = biblioteca_de_especificaciones(BIBLIO, RAIZ / "biblioteca", RAIZ / "gold")
+    biblioteca = {**biblioteca_de_especificaciones(BIBLIO, RAIZ / "biblioteca", RAIZ / "gold"), **formatos_del_usuario()}
 
     @st.cache_resource(show_spinner="Reconociendo el formato…", max_entries=16)
     def detectar_cacheado(firma: tuple, _contenido: bytes, nombre: str, nombres_specs: tuple, _biblio: dict):
@@ -495,6 +589,34 @@ with tc:
         for (gi, f, _tabla), s in zip(leidas, llaves_sugeridas(firma, [d for _, _, d in leidas])):
             if s is not None:
                 sugeridas[(gi, f.name)] = s
+
+    # memoria de configuración: si ya se cruzaron archivos con esta misma estructura, se ofrece lo aprendido
+    grupos_tablas = [[list(d.columns) for g_, _f, d in leidas if g_ == gi] for gi in range(ss.n_grupos)]
+    if cfg is None and all(grupos_tablas):
+        firma_mem = firma_archivos(grupos_tablas)
+        mc = ss.setdefault("mem_cache", {})
+        if firma_mem not in mc:
+            try:
+                mc[firma_mem] = almacen.memoria(firma_mem)
+            except Exception:  # noqa: BLE001
+                mc[firma_mem] = None
+        mem = mc[firma_mem]
+        recien = {f for f, _c in ss.get("recordados", set())}  # lo que se acaba de cruzar en esta sesión no se ofrece
+        if mem is not None and ss.get("memoria_descartada") != firma_mem and firma_mem not in recien:
+            with st.container(border=True):
+                st.markdown(_("🧠 **Ya cruzaste archivos con esta misma estructura** ({0} veces, confianza {1}%).").format(
+                    mem.veces_usado, mem.confianza))
+                if mem.descripcion:
+                    st.caption(mem.descripcion)
+                b_ap, b_no, _h = st.columns([1.3, 1, 2])
+                if b_ap.button(_("Usar la configuración aprendida"), type="primary", key="mem_aplicar"):
+                    from types import SimpleNamespace
+                    aplicar_config(SimpleNamespace(config=mem.config, nombre=_("configuración aprendida")), "memoria", mem.id or None)
+                    st.rerun()
+                if b_no.button(_("Configurar a mano"), key="mem_no"):
+                    ss.memoria_descartada = firma_mem
+                    st.rerun()
+
     for gi in range(ss.n_grupos):
         with st.container(border=True):
             c_nom, c_modo = st.columns([1, 2])
@@ -655,6 +777,20 @@ with tc:
                     for ai, a in enumerate(arch)]) for gi, (nom, arch, modo, _) in enumerate(listos)],
                 comparaciones=[list(c) for c in comparaciones], tolerancia=str(tol))
             ss.archivos_actual = [a.nombre for _, arch, _, _ in listos for a in arch]
+            # aprendizaje por uso: se recuerda la configuración para esta estructura de archivos (una vez por sesión)
+            try:
+                firma_real = firma_archivos([[list(a.df.columns) for a in arch] for _n, arch, _m, _c in listos])
+                clave_mem = (firma_real, ss.cfg_actual.model_dump_json())
+                if clave_mem not in ss.setdefault("recordados", set()):
+                    corregida = (ss.get("origen") == "memoria" and ss.get("memoria_cfg") is not None
+                                 and not config_equivalente(ss.cfg_actual, ss.memoria_cfg))
+                    mem = almacen.recordar(firma_real, ss.cfg_actual, corregida, " vs ".join(n for n, *_ in listos))
+                    ss.recordados.add(clave_mem)
+                    ss.memoria_id = mem.id if (mem is not None and almacen.remoto) else None
+                    ss.aceptada = (not corregida) if ss.get("origen") == "memoria" else None
+                    ss.get("mem_cache", {}).pop(firma_real, None)
+            except Exception as e:  # noqa: BLE001
+                st.warning(f"{_('No se pudo actualizar la memoria de configuración')}: {e}")
         r = ss.get("res_grupos")
         if r is not None:
             nombres = [n for n, *_ in listos]
@@ -696,7 +832,8 @@ with tc:
                             with st.spinner(_("Armando el Excel…")):
                                 ss.res_excel = excel = r.a_excel()
                         g = almacen.guardar(nombre_c, ss.cfg_actual, r.resumen, ss.get("archivos_actual", []), excel,
-                                            usuario_actual(), notas)
+                                            usuario_actual(), notas, ss.get("origen") or "heuristica", ss.get("aceptada"),
+                                            ss.get("memoria_id"))
                         st.success(_('Guardado «{0}». Lo encontrás en la pestaña «Mis cruces» y arriba, en «Partir de un cruce guardado».').format(g.nombre))
     elif any(g is None for g in grupos_ui):
         st.caption(_("Para probar: Grupo 1 = ejemplos/grupos/g1_retenciones_sistema.csv + g1_padron_referencia.csv "

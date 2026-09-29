@@ -632,3 +632,25 @@ def test_serie_numerica_equivale_a_numero():
     got = serie_numerica(pd.Series(vals)).tolist()
     exp = [float(numero(v)) if numero(v) is not None else None for v in vals]
     assert all((g != g and e is None) or abs(g - e) < 1e-9 for g, e in zip(got, exp)), (got, exp)
+
+
+def test_memoria_de_configuracion_local(tmp_path):
+    from regspec.almacen import AlmacenLocal, ArchivoCfg, ConfigCruce, GrupoCfg, config_equivalente, confianza, firma_archivos
+    # la firma depende de la estructura (columnas), no de nombres ni orden de columnas ni mayúsculas
+    f1 = firma_archivos([[["ID_FISCAL", "Monto"]], [["Id", "Importe"]]])
+    assert f1 == firma_archivos([[["monto", "id fiscal"]], [["ID", "importe"]]])
+    assert f1 != firma_archivos([[["ID_FISCAL", "Monto"]], [["Id", "Importe", "Fecha"]]])
+    cfg = ConfigCruce(grupos=[GrupoCfg(nombre="A", archivos=[ArchivoCfg(nombre_original="julio.csv", llave=["ID_FISCAL"])]),
+                              GrupoCfg(nombre="B", archivos=[ArchivoCfg(llave=["Id"])])])
+    otra = cfg.model_copy(deep=True)
+    otra.grupos[0].nombre, otra.grupos[0].archivos[0].nombre_original = "Sistema", "agosto.csv"
+    assert config_equivalente(cfg, otra)  # renombrar no es corregir
+    otra.grupos[0].archivos[0].transformacion = "solo_numeros"
+    assert not config_equivalente(cfg, otra)
+    a = AlmacenLocal(tmp_path)
+    assert a.memoria(f1) is None
+    a.recordar(f1, cfg, False, "A vs B")
+    m = a.recordar(f1, otra, True)
+    assert (m.veces_usado, m.veces_corregido, m.confianza) == (2, 1, confianza(2, 1)) and m.descripcion == "A vs B"
+    assert a.memoria(f1).config == otra and a.listar() == []  # la memoria no aparece como cruce guardado
+    assert confianza(10, 0) > confianza(3, 0) > confianza(3, 2)

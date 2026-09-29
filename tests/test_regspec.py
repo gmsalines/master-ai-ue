@@ -551,3 +551,25 @@ def test_transformar_serie_equivale_a_transformar():
     s = pd.Series(["20-05098256-5", "000123", " 0 ", "abc", None, float("nan"), "00", "á b", 123])
     for tipo in ("exacta", "solo_numeros", "sin_ceros", "normalizada"):
         assert transformar_serie(s, tipo).tolist() == [transformar(v, tipo) for v in s]
+
+
+# ---------------------------------------------------------------- cruces guardados
+
+def test_almacen_local_guarda_lista_y_borra(tmp_path):
+    from regspec.almacen import AlmacenLocal, ArchivoCfg, ConfigCruce, FiltroCfg, GrupoCfg
+    cfg = ConfigCruce(grupos=[
+        GrupoCfg(nombre="Sistema", modo="base_referencia", archivos=[
+            ArchivoCfg(nombre_original="ret.xlsx", llave=["ID"], transformacion="solo_numeros",
+                       filtros=[FiltroCfg(columna="MONTO", operador="<=", valor="0")]),
+            ArchivoCfg(nombre_original="padron.txt", llave=["id"], traer=["crc"])]),
+        GrupoCfg(nombre="Presentado", archivos=[ArchivoCfg(llave=["cuit", "comprobante"], transformacion="solo_numeros")])],
+        comparaciones=[["MONTO", "monto"]], tolerancia="0.01")
+    a = AlmacenLocal(tmp_path)
+    g = a.guardar("Julio", cfg, {"en todos los grupos": 9}, ["ret.xlsx", "padron.txt", "pres.txt"], b"xlsx", "gabi@x.com")
+    assert [x.id for x in a.listar()] == [g.id] and a.listar("otro@x.com") == []
+    leido = a.obtener(g.id)
+    assert leido.config == cfg and leido.resumen == {"en todos los grupos": "9"} and a.excel(g.id) == b"xlsx"
+    assert leido.config.archivo(0, 1).traer == ["crc"] and leido.config.archivo(2, 0) is None
+    assert a.borrar(g.id) and a.listar() == []
+    with pytest.raises(ValueError):
+        a.obtener("../../etc/passwd")

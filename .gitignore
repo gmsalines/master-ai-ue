@@ -8,3 +8,4 @@ resultados/
 .streamlit/secrets.toml
 especificaciones/*.json
 !especificaciones/.gitkeep
+cruces_guardados/

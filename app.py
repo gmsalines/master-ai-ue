@@ -85,8 +85,37 @@ def guardar_en_biblioteca(spec: Especificacion, nombre: str) -> str:
     (BIBLIO / f"{slug}.json").write_text(spec.model_dump_json(indent=2), encoding="utf-8")
     return slug
 
-tc, t1, t2, t3, t4 = st.tabs(["🔀 Cruzar archivos", "📘 Aprender un formato (manual)", "📋 Especificación",
-                              "✅ Validar archivo", "🧾 Generar archivo"])
+from regspec.almacen import AlmacenLocal, ArchivoCfg, ConfigCruce, FiltroCfg, GrupoCfg
+
+almacen = AlmacenLocal(RAIZ / "cruces_guardados")
+
+
+def usuario_actual() -> str:
+    """Mail del usuario si la app corre con login (Streamlit); si no, 'local'."""
+    try:
+        u = getattr(st, "user", None)
+        mail = u.get("email") if u is not None else None
+        return mail or "local"
+    except Exception:  # noqa: BLE001
+        return "local"
+
+
+def aplicar_config(cruce) -> None:
+    """Deja lista una configuración guardada para aplicarla a los archivos que se suban."""
+    ss.cfg = cruce.config if cruce is not None else None
+    ss.cfg_nombre = cruce.nombre if cruce is not None else None
+    if cruce is not None:
+        ss.n_grupos = max(2, len(cruce.config.grupos))
+    ss.cfg_ver = ss.get("cfg_ver", 0) + 1
+    ss.pop("res_grupos", None)
+
+
+ss.setdefault("cfg", None)
+ss.setdefault("cfg_nombre", None)
+ss.setdefault("cfg_ver", 0)
+
+tc, tm, t1, t2, t3, t4 = st.tabs(["🔀 Cruzar archivos", "🗂 Mis cruces", "📘 Aprender un formato (manual)", "📋 Especificación",
+                                  "✅ Validar archivo", "🧾 Generar archivo"])
 
 # ---------------------------------------------------------------- 1. compilar
 with t1:
@@ -286,9 +315,27 @@ with tc:
     if ss.spec is not None:
         biblioteca["(compilada en esta sesión)"] = ss.spec
 
+    guardados = almacen.listar()
+    if guardados:
+        g1c, g2c = st.columns([4, 1])
+        etiquetas = ["(configuración nueva)"] + [f"{g.nombre} · {g.fecha[:10]}" for g in guardados]
+        actual = next((i + 1 for i, g in enumerate(guardados) if g.nombre == ss.cfg_nombre), 0)
+        sel = g1c.selectbox("Partir de un cruce guardado", range(len(etiquetas)), index=actual,
+                            format_func=lambda i: etiquetas[i],
+                            help="Aplica los mismos grupos, llaves, filtros, importes y tolerancia a los archivos nuevos.")
+        g2c.write("")
+        if g2c.button("Aplicar", use_container_width=True):
+            aplicar_config(guardados[sel - 1] if sel else None)
+            st.rerun()
+    cfg: Optional[ConfigCruce] = ss.cfg
+    V = f"v{ss.cfg_ver}"  # sufijo de claves: cambia al aplicar una configuración y reinicia los controles
+    if cfg is not None:
+        st.info(f"Usando la configuración **{ss.cfg_nombre}**. Subí los archivos del período en el mismo orden "
+                f"(grupo y posición dentro del grupo) y revisá las llaves antes de cruzar.")
+
     st.subheader("1 · Armá los grupos de archivos")
 
-    def leer_uno(f, lado: str, i: int):
+    def leer_uno(f, lado: str, i: int, hoja_def: Optional[str] = None):
         if True:
             k = f"{lado}{i}"
             det = detectar_cacheado(f.getvalue(), f.name, tuple(biblioteca), biblioteca)
@@ -296,7 +343,8 @@ with tc:
             if f.name.lower().endswith((".xlsx", ".xls", ".xlsm")):
                 hojas, por_defecto = hojas_cacheado(f.getvalue())
                 if len(hojas) > 1:
-                    hoja = st.selectbox("Hoja", hojas, index=hojas.index(por_defecto), key=f"hoja_{k}",
+                    hoja_ini = hoja_def if hoja_def in hojas else por_defecto
+                    hoja = st.selectbox("Hoja", hojas, index=hojas.index(hoja_ini), key=f"hoja_{k}_{V}",
                                         help="Se elige sola la hoja con más datos; la fila de encabezado también se detecta.")
                 else:
                     st.caption("Tabla (Excel)")
@@ -375,6 +423,7 @@ with tc:
     st.caption("Cada **grupo** reúne uno o varios archivos. En cada archivo definís su **llave** (y cómo normalizarla); "
                "el cruce se hace sobre esa llave entre todos los grupos.")
     grupos_ui = []
+    hojas_sel: dict = {}
     # sugerencia conjunta de llaves con todos los archivos ya subidos (se recalcula solo si cambian los archivos)
     subidos = [(gi, f) for gi in range(ss.n_grupos) for f in (ss.get(f"gfiles_{gi}") or [])]
     leidas = [(gi, f, tabla_silenciosa(f)) for gi, f in subidos]
@@ -388,47 +437,66 @@ with tc:
     for gi in range(ss.n_grupos):
         with st.container(border=True):
             c_nom, c_modo = st.columns([1, 2])
-            nombre_g = c_nom.text_input("Nombre del grupo", f"Grupo {gi + 1}", key=f"gnom_{gi}")
+            gcfg = cfg.grupos[gi] if cfg is not None and gi < len(cfg.grupos) else None
+            nombre_g = c_nom.text_input("Nombre del grupo", gcfg.nombre if gcfg else f"Grupo {gi + 1}", key=f"gnom_{gi}_{V}")
             archivos = st.file_uploader(f"Archivos de «{nombre_g}» (uno o varios)", type=["csv", "xlsx", "xls", "txt", "xml", "dat"],
                                         accept_multiple_files=True, key=f"gfiles_{gi}")
-            modo_g = c_modo.selectbox("Cómo combinar los archivos del grupo", list(MODOS), format_func=MODOS.get,
-                                      key=f"gmodo_{gi}", disabled=not archivos or len(archivos) < 2)
+            modo_ini = list(MODOS).index(gcfg.modo) if gcfg and gcfg.modo in MODOS else 0
+            modo_g = c_modo.selectbox("Cómo combinar los archivos del grupo", list(MODOS), format_func=MODOS.get, index=modo_ini,
+                                      key=f"gmodo_{gi}_{V}", disabled=not archivos or len(archivos) < 2)
             if not archivos:
                 grupos_ui.append(None)
                 continue
             arch_objs, completo = [], True
             for fi, f in enumerate(archivos):
+                acfg = cfg.archivo(gi, fi) if cfg is not None else None
                 with st.expander(f"📄 {f.name}", expanded=True):
-                    df = leer_uno(f, f"g{gi}", fi)
+                    df = leer_uno(f, f"g{gi}", fi, acfg.hoja if acfg else None)
                     if df is None:
                         completo = False
                         continue
                     cols = [c for c in df.columns if not c.startswith("_")]
                     s = sugeridas.get((gi, f.name))
-                    sug = [s[0]] if s and s[0] in cols else []
+                    if acfg is not None:  # configuración guardada: manda sobre la sugerencia
+                        faltan = [c for c in acfg.llave + acfg.traer + [x.columna for x in acfg.filtros] if c not in cols]
+                        if faltan:
+                            st.warning("Columnas de la configuración que no están en este archivo: " + ", ".join(faltan))
+                        sug = [c for c in acfg.llave if c in cols]
+                        tr_def = acfg.transformacion if acfg.transformacion in TRANSFORMACIONES else "exacta"
+                        k_sug = "cfg"
+                    else:
+                        sug = [s[0]] if s and s[0] in cols else []
+                        tr_def = s[1] if s else "exacta"
+                        k_sug = f"{'_'.join(map(str, sug))}_{len(leidas)}"
                     c1, c2 = st.columns([2, 1])
-                    llave = c1.multiselect("Llave (una o varias columnas)", cols, default=sug, key=f"llave_{gi}_{fi}_{'_'.join(map(str, sug))}_{len(leidas)}",
+                    llave = c1.multiselect("Llave (una o varias columnas)", cols, default=sug, key=f"llave_{gi}_{fi}_{V}_{k_sug}",
                                            help="Sugerida por código: la columna cuyos valores coinciden con los de los otros archivos.")
-                    tr_def = s[1] if s else "exacta"
                     tr = c2.selectbox("Normalizar la llave", list(TRANSFORMACIONES), format_func=TRANSFORMACIONES.get,
-                                      index=list(TRANSFORMACIONES).index(tr_def), key=f"tr_{gi}_{fi}_{tr_def}_{len(leidas)}")
-                    if s and s[2] > 0 and llave == sug:
+                                      index=list(TRANSFORMACIONES).index(tr_def), key=f"tr_{gi}_{fi}_{V}_{k_sug}_{tr_def}")
+                    if acfg is None and s and s[2] > 0 and llave == sug:
                         st.caption(f"Coincidencia de valores con la llave del primer archivo: {s[2]:.0%}")
                     if llave:
                         st.caption("Ejemplos de llave: " + ", ".join(
                             "|".join(transformar(v, tr) for v in fila) for fila in df[llave].head(3).itertuples(index=False)))
                     filtros = []
                     fc1, fc2, fc3 = st.columns(3)
-                    fcol = fc1.selectbox("Excluir filas donde…", ["(sin filtro)"] + cols, key=f"fcol_{gi}_{fi}")
+                    f0 = acfg.filtros[0] if acfg is not None and acfg.filtros and acfg.filtros[0].columna in cols else None
+                    opciones_f = ["(sin filtro)"] + cols
+                    fcol = fc1.selectbox("Excluir filas donde…", opciones_f, index=opciones_f.index(f0.columna) if f0 else 0,
+                                         key=f"fcol_{gi}_{fi}_{V}")
                     if fcol != "(sin filtro)":
-                        fop = fc2.selectbox("condición", OPERADORES, key=f"fop_{gi}_{fi}")
-                        fval = fc3.text_input("valor", key=f"fval_{gi}_{fi}") if fop not in ("vacío", "no vacío") else ""
+                        fop = fc2.selectbox("condición", OPERADORES, index=OPERADORES.index(f0.operador) if f0 and f0.operador in OPERADORES else 0,
+                                            key=f"fop_{gi}_{fi}_{V}")
+                        fval = fc3.text_input("valor", f0.valor if f0 else "", key=f"fval_{gi}_{fi}_{V}") if fop not in ("vacío", "no vacío") else ""
                         filtros.append(Filtro(fcol, fop, fval))
                     traer = []
                     if modo_g == "base_referencia" and fi > 0:
-                        traer = st.multiselect("Columnas a traer a la base", [c for c in cols if c not in llave], key=f"traer_{gi}_{fi}")
+                        opciones_t = [c for c in cols if c not in llave]
+                        traer = st.multiselect("Columnas a traer a la base", opciones_t,
+                                               default=[c for c in (acfg.traer if acfg else []) if c in opciones_t], key=f"traer_{gi}_{fi}_{V}")
                     if llave:
                         arch_objs.append(ArchivoGrupo(f.name, df, llave, tr, filtros, traer))
+                        hojas_sel[(gi, len(arch_objs) - 1)] = ss.get(f"hoja_g{gi}{fi}_{V}")
                     else:
                         completo = False
             if not completo or not arch_objs:
@@ -449,7 +517,7 @@ with tc:
     if len(listos) >= 2 and len(listos) == len(grupos_ui):
         st.subheader("2 · ¿Qué comparo en cada llave?")
         st.caption("Elegí la columna de importe de cada grupo; se suman por llave y se comparan con la tolerancia.")
-        n_cmp = st.number_input("Cantidad de importes a comparar", 0, 5, 1, key="ncmp")
+        n_cmp = st.number_input("Cantidad de importes a comparar", 0, 5, min(5, len(cfg.comparaciones)) if cfg is not None else 1, key=f"ncmp_{V}")
         comparaciones = []
         for k in range(int(n_cmp)):
             cc = st.columns(len(listos))
@@ -458,20 +526,33 @@ with tc:
                 num = [c for c in cols_g if re.search(r"monto|importe|total|base|valor|saldo|retenid|retenci|prima|pagad", c, re.I)
                        and not re.search(r"diferencia|control|fecha|date|tipo|codigo|número|numero", c, re.I)] or cols_g
                 num.sort(key=lambda c: 0 if re.search(r"monto|importe", c, re.I) else 1)
-                if j == 0:
+                previo = cfg.comparaciones[k][j] if cfg is not None and k < len(cfg.comparaciones) and j < len(cfg.comparaciones[k]) else None
+                if previo in cols_g:
+                    elegido = previo
+                elif j == 0:
                     elegido = num[min(k, len(num) - 1)]
                 else:  # la más parecida a la elegida en el primer grupo
                     elegido = max(num, key=lambda c: difflib.SequenceMatcher(None, c.lower().replace("_", " "),
                                                                           fila[0].lower().replace("_", " ")).ratio())
-                fila.append(cc[j].selectbox(f"{nom}", cols_g, index=cols_g.index(elegido), key=f"cmp_{k}_{j}"))
+                fila.append(cc[j].selectbox(f"{nom}", cols_g, index=cols_g.index(elegido), key=f"cmp_{k}_{j}_{V}"))
             comparaciones.append(tuple(fila))
-        tol = st.number_input("Tolerancia en importes", value=0.01, min_value=0.0, step=0.01, format="%.2f", key="tol_g")
+        tol = st.number_input("Tolerancia en importes", value=float(cfg.tolerancia) if cfg is not None else 0.01, min_value=0.0,
+                              step=0.01, format="%.2f", key=f"tol_g_{V}")
 
         st.subheader("3 · Resultado")
         if st.button("Cruzar", type="primary"):
             grupos = [Grupo(nom, arch, modo, []) for nom, arch, modo, _ in listos]
             with st.spinner("Cruzando…"):
                 ss.res_grupos = cruzar_grupos(grupos, comparaciones, Decimal(str(tol)))
+                ss.res_excel = ss.res_grupos.a_excel()
+            ss.cfg_actual = ConfigCruce(
+                grupos=[GrupoCfg(nombre=nom, modo=modo, archivos=[
+                    ArchivoCfg(nombre_original=a.nombre, llave=a.llave, transformacion=a.transformacion,
+                               filtros=[FiltroCfg(columna=x.columna, operador=x.operador, valor=x.valor) for x in a.filtros],
+                               traer=a.traer, hoja=hojas_sel.get((gi, ai)))
+                    for ai, a in enumerate(arch)]) for gi, (nom, arch, modo, _) in enumerate(listos)],
+                comparaciones=[list(c) for c in comparaciones], tolerancia=str(tol))
+            ss.archivos_actual = [a.nombre for _, arch, _, _ in listos for a in arch]
         r = ss.get("res_grupos")
         if r is not None:
             nombres = [n for n, *_ in listos]
@@ -489,7 +570,59 @@ with tc:
             ver = st.selectbox("Ver llaves", estados, key="ver_estado")
             m = r.matriz if ver == "(todos)" else r.matriz[r.matriz["estado"] == ver]
             st.dataframe(m.astype(str), hide_index=True, width="stretch")
-            st.download_button("Descargar resultado (Excel)", r.a_excel(), "conciliacion.xlsx")
+            excel = ss.get("res_excel") or r.a_excel()
+            st.download_button("Descargar resultado (Excel)", excel, "conciliacion.xlsx")
+            if ss.get("cfg_actual") is not None:
+                with st.expander("💾 Guardar este cruce", expanded=False):
+                    st.caption("Se guardan la configuración (para repetirla con los archivos del próximo período) y el resultado.")
+                    nom_def = ss.cfg_nombre or " vs ".join(nombres)
+                    nombre_c = st.text_input("Nombre del cruce", nom_def, key=f"nom_guardar_{V}")
+                    notas = st.text_area("Notas (opcional)", key=f"notas_guardar_{V}")
+                    if st.button("Guardar", type="primary", key="btn_guardar"):
+                        g = almacen.guardar(nombre_c, ss.cfg_actual, r.resumen, ss.get("archivos_actual", []), excel,
+                                            usuario_actual(), notas)
+                        st.success(f"Guardado «{g.nombre}». Lo encontrás en la pestaña «Mis cruces» y arriba, en «Partir de un cruce guardado».")
     elif any(g is None for g in grupos_ui):
         st.caption("Para probar: Grupo 1 = ejemplos/grupos/g1_retenciones_sistema.csv + g1_padron_referencia.csv "
                    "(modo base + referencia) · Grupo 2 = ejemplos/grupos/g2_reporte_agente.csv")
+
+
+# ---------------------------------------------------------------- mis cruces
+with tm:
+    guardados = almacen.listar()
+    if ss.cfg_nombre:
+        st.success(f"Configuración «{ss.cfg_nombre}» lista: andá a «🔀 Cruzar archivos» y subí los archivos del nuevo período.")
+    if not guardados:
+        st.info("Todavía no hay cruces guardados. Después de cruzar, usá «💾 Guardar este cruce».")
+    for g in guardados:
+        with st.expander(f"**{g.nombre}** · {g.fecha.replace('T', ' ')[:16]} · {g.usuario}"):
+            a, b, c = st.columns(3)
+            a.metric("En todos los grupos", g.resumen.get("en todos los grupos", "–"))
+            b.metric("…con diferencias", g.resumen.get("en todos, con diferencias", "–"))
+            c.metric("Llaves en el universo", g.resumen.get("llaves en el universo", "–"))
+            if g.notas:
+                st.write(g.notas)
+            st.caption("Archivos: " + ", ".join(g.archivos))
+            filas = []
+            for gi, gr in enumerate(g.config.grupos):
+                for fi, ar in enumerate(gr.archivos):
+                    filas.append({"grupo": gr.nombre, "modo": gr.modo if fi == 0 else "", "archivo": ar.nombre_original,
+                                  "llave": " + ".join(ar.llave), "normalización": ar.transformacion,
+                                  "filtros": "; ".join(f"{x.columna} {x.operador} {x.valor}".strip() for x in ar.filtros),
+                                  "trae": ", ".join(ar.traer)})
+            st.dataframe(pd.DataFrame(filas), hide_index=True, width="stretch")
+            if g.config.comparaciones:
+                st.caption("Importes comparados: " + " · ".join(" vs ".join(c) for c in g.config.comparaciones)
+                           + f" · tolerancia {g.config.tolerancia}")
+            with st.expander("Resumen completo"):
+                st.dataframe(pd.DataFrame([{"indicador": k, "valor": v} for k, v in g.resumen.items()]), hide_index=True)
+            x1, x2, x3 = st.columns(3)
+            xl = almacen.excel(g.id)
+            if xl:
+                x1.download_button("Descargar Excel", xl, f"{re.sub(r'[^A-Za-z0-9_-]+', '_', g.nombre)[:60]}.xlsx", key=f"dl_{g.id}")
+            if x2.button("Reutilizar configuración", key=f"reu_{g.id}"):
+                aplicar_config(g)
+                st.rerun()
+            if x3.checkbox("Borrar", key=f"conf_{g.id}") and x3.button("Confirmar borrado", key=f"del_{g.id}"):
+                almacen.borrar(g.id)
+                st.rerun()

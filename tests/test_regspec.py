@@ -593,10 +593,33 @@ def test_todos_los_textos_de_la_app_tienen_traduccion_al_portugues():
 
 
 def test_traducir_mensajes_variables():
-    from regspec.grupos import MODOS, OPERADORES, TRANSFORMACIONES
+    from regspec.grupos import ACCIONES, MODOS, OPERADORES_TEXTO, TRANSFORMACIONES
     from regspec.i18n import PT, traducir
     assert traducir("solo en Sistema + Agente", "pt") == "só em Sistema + Agente"
     assert traducir("'2012345678X' no cumple el patrón \\d{11}", "pt") == "'2012345678X' não cumpre o padrão \\d{11}"
     assert traducir("1 errores en 7815 registros:", "pt") == "1 erros em 7815 registros:"
     assert traducir("texto sin traducción", "pt") == "texto sin traducción" and traducir("Cruzar", "es") == "Cruzar"
-    assert all(v in PT for v in [*MODOS.values(), *TRANSFORMACIONES.values(), *OPERADORES] if any(ch.isalpha() for ch in v))
+    assert all(v in PT for v in [*MODOS.values(), *TRANSFORMACIONES.values(), *OPERADORES_TEXTO.values(), *ACCIONES.values()])
+
+
+def test_filtros_incluir_excluir_y_varios_valores():
+    from regspec.grupos import ArchivoGrupo, Filtro
+    df = pd.DataFrame({"id": ["1", "2", "3", "4", "5"],
+                       "leyenda": ["Régimen A, anexo", "Régimen B", "Otro", "Régimen A, anexo", ""],
+                       "monto": ["10", "-5", "0", "100.00", "7"]})
+    def ids(*filtros):
+        d, n = ArchivoGrupo("x", df, ["id"], filtros=list(filtros)).preparado()
+        return d["id"].tolist(), n
+    # incluir solo dos valores (uno con coma adentro)
+    assert ids(Filtro("leyenda", "==", accion="incluir", valores=["Régimen A, anexo", "Régimen B"])) == (["1", "2", "4"], 2)
+    # excluir esos mismos valores
+    assert ids(Filtro("leyenda", "==", accion="excluir", valores=["Régimen A, anexo", "Régimen B"])) == (["3", "5"], 3)
+    # es distinto de (ninguno de los valores) + incluir
+    assert ids(Filtro("leyenda", "!=", accion="incluir", valores=["Otro"]))[0] == ["1", "2", "4", "5"]
+    # contiene alguno
+    assert ids(Filtro("leyenda", "contiene", accion="incluir", valores=["b", "otro"]))[0] == ["2", "3"]
+    # numérico: 100 == 100.00, y dos condiciones combinadas
+    assert ids(Filtro("monto", "==", accion="incluir", valores=["100"]))[0] == ["4"]
+    assert ids(Filtro("monto", "<=", "0"), Filtro("leyenda", "vacío"))[0] == ["1", "4"]
+    # compatibilidad: Filtro(columna, operador, valor) sigue siendo "excluir"
+    assert ids(Filtro("monto", "<=", "0"))[0] == ["1", "4", "5"]

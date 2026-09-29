@@ -136,6 +136,13 @@ def aplicar_config(cruce) -> None:
     ss.pop("res_grupos", None)
 
 
+def describir_filtro(x) -> str:
+    from regspec.grupos import ACCIONES, OPERADORES_TEXTO
+    vals = x.valores or ([x.valor] if x.valor else [])
+    accion = _(ACCIONES.get(x.accion, x.accion)).rstrip("…")
+    return f"{accion} {x.columna} {_(OPERADORES_TEXTO.get(x.operador, x.operador))} " + " | ".join(vals)
+
+
 ss.setdefault("cfg", None)
 ss.setdefault("cfg_nombre", None)
 ss.setdefault("cfg_ver", 0)
@@ -424,7 +431,8 @@ with tc:
             st.caption(_("{0} registros").format(f"{len(df):,}".replace(",", ".")))
             return df
 
-    from regspec.grupos import MODOS, OPERADORES, TRANSFORMACIONES, ArchivoGrupo, Filtro, Grupo, cruzar_grupos, transformar
+    from regspec.grupos import (ACCIONES, MODOS, OPERADORES, OPERADORES_MULTIVALOR, OPERADORES_TEXTO, TRANSFORMACIONES,
+                                ArchivoGrupo, Filtro, Grupo, cruzar_grupos, transformar)
 
     from regspec.grupos import sugerir_llaves
 
@@ -504,16 +512,44 @@ with tc:
                         st.caption(_("Ejemplos de llave: {0}").format(", ".join(
                             "|".join(transformar(v, tr) for v in fila) for fila in df[llave].head(3).itertuples(index=False))))
                     filtros = []
-                    fc1, fc2, fc3 = st.columns(3)
-                    f0 = acfg.filtros[0] if acfg is not None and acfg.filtros and acfg.filtros[0].columna in cols else None
-                    opciones_f = ["(sin filtro)"] + cols
-                    fcol = fc1.selectbox(_("Excluir filas donde…"), opciones_f, index=opciones_f.index(f0.columna) if f0 else 0, format_func=_,
-                                         key=f"fcol_{gi}_{fi}_{V}")
-                    if fcol != "(sin filtro)":
-                        fop = fc2.selectbox(_("condición"), OPERADORES, format_func=_, index=OPERADORES.index(f0.operador) if f0 and f0.operador in OPERADORES else 0,
-                                            key=f"fop_{gi}_{fi}_{V}")
-                        fval = fc3.text_input(_("valor"), f0.valor if f0 else "", key=f"fval_{gi}_{fi}_{V}") if fop not in ("vacío", "no vacío") else ""
-                        filtros.append(Filtro(fcol, fop, fval))
+                    previos = [x for x in (acfg.filtros if acfg is not None else []) if x.columna in cols]
+                    kn = f"nfil_{gi}_{fi}_{V}"
+                    ss.setdefault(kn, max(1, len(previos)))
+                    for qi in range(ss[kn]):
+                        f0 = previos[qi] if qi < len(previos) else None
+                        fk = f"{gi}_{fi}_{qi}_{V}"
+                        fc0, fc1, fc2 = st.columns(3)
+                        fc3 = st
+                        acciones = ["ninguno", *ACCIONES]
+                        accion = fc0.selectbox(_("Filtro") if qi == 0 else _("Otra condición"), acciones,
+                                               index=acciones.index(f0.accion) if f0 and f0.accion in acciones else 0,
+                                               format_func=lambda a: _("(sin filtro)") if a == "ninguno" else _(ACCIONES[a]),
+                                               key=f"facc_{fk}")
+                        if accion == "ninguno":
+                            continue
+                        fcol = fc1.selectbox(_("Columna"), cols, index=cols.index(f0.columna) if f0 else 0, key=f"fcol_{fk}")
+                        fop = fc2.selectbox(_("condición"), OPERADORES, format_func=lambda o: _(OPERADORES_TEXTO[o]),
+                                            index=OPERADORES.index(f0.operador) if f0 and f0.operador in OPERADORES else 0,
+                                            key=f"fop_{fk}")
+                        valores, fval = [], ""
+                        if fop in OPERADORES_MULTIVALOR:
+                            distintos = pd.unique(df[fcol].dropna().astype(str).str.strip())
+                            distintos = sorted(v for v in distintos if v)
+                            previos_v = (f0.lista() if hasattr(f0, "lista") else (f0.valores or ([f0.valor] if f0.valor else []))) if f0 else []
+                            if fop != "contiene" and len(distintos) <= 500:
+                                valores = fc3.multiselect(_("Valores"), distintos, default=[v for v in previos_v if v in distintos],
+                                                          placeholder=_("Elegí uno o varios valores"), key=f"fvals_{fk}",
+                                                          help=_("Se toman las filas que coinciden con cualquiera de los valores elegidos."))
+                            else:
+                                texto = fc3.text_area(_("Valores (uno por línea)"), "\n".join(previos_v), height=80, key=f"fvalt_{fk}",
+                                                      help=_("Escribí un valor por línea; se toman las filas que coinciden con cualquiera."))
+                                valores = [v.strip() for v in texto.splitlines() if v.strip()]
+                        elif fop not in ("vacío", "no vacío"):
+                            fval = fc3.text_input(_("valor"), f0.valor if f0 else "", key=f"fval_{fk}")
+                        filtros.append(Filtro(fcol, fop, fval, accion, valores))
+                    if st.button(_("➕ Otra condición"), key=f"masfil_{gi}_{fi}_{V}"):
+                        ss[kn] += 1
+                        st.rerun()
                     traer = []
                     if modo_g == "base_referencia" and fi > 0:
                         opciones_t = [c for c in cols if c not in llave]
@@ -573,7 +609,8 @@ with tc:
             ss.cfg_actual = ConfigCruce(
                 grupos=[GrupoCfg(nombre=nom, modo=modo, archivos=[
                     ArchivoCfg(nombre_original=a.nombre, llave=a.llave, transformacion=a.transformacion,
-                               filtros=[FiltroCfg(columna=x.columna, operador=x.operador, valor=x.valor) for x in a.filtros],
+                               filtros=[FiltroCfg(columna=x.columna, operador=x.operador, valor=x.valor, accion=x.accion,
+                                                  valores=x.valores) for x in a.filtros],
                                traer=a.traer, hoja=hojas_sel.get((gi, ai)))
                     for ai, a in enumerate(arch)]) for gi, (nom, arch, modo, _) in enumerate(listos)],
                 comparaciones=[list(c) for c in comparaciones], tolerancia=str(tol))
@@ -635,7 +672,7 @@ with tm:
                 for fi, ar in enumerate(gr.archivos):
                     filas.append({"grupo": gr.nombre, "modo": gr.modo if fi == 0 else "", "archivo": ar.nombre_original,
                                   "llave": " + ".join(ar.llave), "normalización": ar.transformacion,
-                                  "filtros": "; ".join(f"{x.columna} {x.operador} {x.valor}".strip() for x in ar.filtros),
+                                  "filtros": "; ".join(describir_filtro(x) for x in ar.filtros),
                                   "trae": ", ".join(ar.traer)})
             st.dataframe(_df(pd.DataFrame(filas)), hide_index=True, width="stretch")
             if g.config.comparaciones:

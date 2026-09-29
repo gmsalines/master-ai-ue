@@ -37,6 +37,12 @@ MODOS = {
     "sumar_por_llave": "Sumar importes por llave",
 }
 OPERADORES = ["==", "!=", ">", ">=", "<", "<=", "contiene", "vacío", "no vacío"]
+# cómo se muestran (sin símbolos, para usuarios que no programan)
+OPERADORES_TEXTO = {"==": "es igual a", "!=": "es distinto de", ">": "es mayor que", ">=": "es mayor o igual a",
+                    "<": "es menor que", "<=": "es menor o igual a", "contiene": "contiene", "vacío": "está vacío",
+                    "no vacío": "no está vacío"}
+OPERADORES_MULTIVALOR = ("==", "!=", "contiene")  # admiten varios valores (cumple si coincide con alguno)
+ACCIONES = {"excluir": "Excluir filas donde…", "incluir": "Incluir solo filas donde…"}
 
 
 def transformar(valor, tipo: str) -> str:
@@ -87,26 +93,54 @@ def transformar_serie(s: pd.Series, tipo: str) -> pd.Series:
 
 @dataclass
 class Filtro:
+    """Condición sobre una columna. `accion`: "excluir" descarta las filas que la cumplen; "incluir" deja solo esas.
+
+    `valores` admite varios valores para ==, != y contiene (cumple si coincide con alguno; en != si no coincide con
+    ninguno). `valor` se mantiene por compatibilidad y para las comparaciones numéricas.
+    """
     columna: str
     operador: str
     valor: str = ""
+    accion: str = "excluir"
+    valores: list[str] = field(default_factory=list)
+
+    def lista(self) -> list[str]:
+        vals = [v.strip() for v in self.valores if str(v).strip()] or ([self.valor.strip()] if str(self.valor).strip() else [])
+        return vals
 
     def mascara(self, df: pd.DataFrame) -> pd.Series:
-        """True = la fila se EXCLUYE."""
+        """True = la fila cumple la condición."""
         col = df[self.columna]
+        vacia = col.isna() | (col.astype(str).str.strip() == "")
         if self.operador == "vacío":
-            return col.isna() | (col.astype(str).str.strip() == "")
+            return vacia
         if self.operador == "no vacío":
-            return ~(col.isna() | (col.astype(str).str.strip() == ""))
-        if self.operador == "contiene":
-            return col.astype(str).str.contains(self.valor, case=False, na=False, regex=False)
-        vn = numero(self.valor)
-        nums = col.map(numero)
-        if vn is not None and nums.notna().any():
-            ops = {"==": nums == vn, "!=": nums != vn, ">": nums > vn, ">=": nums >= vn, "<": nums < vn, "<=": nums <= vn}
-            return ops[self.operador].fillna(False).astype(bool)
+            return ~vacia
+        vals = self.lista()
         s = col.astype(str).str.strip()
-        return (s == self.valor) if self.operador == "==" else (s != self.valor)
+        if self.operador == "contiene":
+            m = pd.Series(False, index=df.index)
+            for v in vals:
+                m |= s.str.contains(v, case=False, na=False, regex=False)
+            return m
+        if self.operador in ("==", "!="):
+            nums = [numero(v) for v in vals]
+            if vals and all(n is not None for n in nums) and col.map(numero).notna().any():
+                en = col.map(numero).isin(nums)  # 100 == 100.00
+            else:
+                en = s.isin(vals)
+            return en if self.operador == "==" else ~en
+        vn = numero(vals[0]) if vals else None
+        if vn is None:
+            return pd.Series(False, index=df.index)
+        nums = col.map(numero)
+        ops = {">": nums > vn, ">=": nums >= vn, "<": nums < vn, "<=": nums <= vn}
+        return ops[self.operador].fillna(False).astype(bool)
+
+    def descartar(self, df: pd.DataFrame) -> pd.Series:
+        """True = la fila se descarta según la acción del filtro."""
+        m = self.mascara(df)
+        return m if self.accion != "incluir" else ~m
 
 
 @dataclass
@@ -123,7 +157,7 @@ class ArchivoGrupo:
         excluidas = 0
         for f in self.filtros:
             if f.columna in df.columns:
-                m = f.mascara(df)
+                m = f.descartar(df)
                 excluidas += int(m.sum())
                 df = df[~m]
         partes = [transformar_serie(df[c], self.transformacion) for c in self.llave]

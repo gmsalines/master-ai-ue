@@ -24,6 +24,8 @@ class FiltroCfg(BaseModel):
     columna: str
     operador: str
     valor: str = ""
+    accion: str = "excluir"
+    valores: list[str] = Field(default_factory=list)
 
 
 class ArchivoCfg(BaseModel):

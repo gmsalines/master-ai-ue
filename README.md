@@ -53,6 +53,8 @@ regspec/
   base_sin_ia.py    línea base: parser convencional por reglas (sin IA); también primer paso del modo híbrido
   cruce.py          lectura de archivos, detección de formato y cruce de 2 tablas
   grupos.py         conciliación N-way por grupos de archivos con llaves (flujo 2, sin IA)
+  almacen.py        cruces guardados: configuración reutilizable + resultado
+  i18n.py           textos de la interfaz en español y portugués
   llm/              proveedores desacoplados, prompts, extractor con bucle
   evaluacion/       batería de mutaciones, métricas, banco de evaluación
 manuales/           3 manuales ficticios de dificultad creciente
@@ -208,6 +210,13 @@ Lectura de la línea base: el parser convencional resuelve bien una tabla limpia
 - Excel: se elige la hoja con más datos y se detecta la fila de encabezado (reportes con títulos arriba).
 - TXT delimitado de un solo tipo de registro: se lee con pandas; un padrón de ~4,9 millones de líneas (370 MB) se lee en ~8 s y el cruce completo (lookup contra el padrón + 3 grupos) tarda ~5 s. La validación campo a campo se hace en «Validar archivo».
 - La app acepta archivos de hasta 1 GB (`.streamlit/config.toml`).
+
+## Cruces guardados e idiomas
+
+- Después de cruzar, «💾 Guardar este cruce» guarda la **configuración** (grupos, llaves, normalización, filtros, columnas traídas, importes y tolerancia) y el **resultado** (resumen + Excel) en `cruces_guardados/` (fuera del repositorio).
+- El período siguiente se elige el cruce en «Partir de un cruce guardado» (o «Reutilizar configuración» en la pestaña «Mis cruces»): la configuración se aplica a los archivos nuevos por posición (grupo y orden dentro del grupo) y avisa si falta alguna columna.
+- El almacenamiento está detrás de la interfaz `Almacen`; para la versión publicada con usuarios se reemplaza `AlmacenLocal` por una base de datos.
+- La interfaz está en **español y portugués** (selector 🌐 en la barra lateral; por defecto, el idioma del navegador). Los textos se escriben en español con `_()` y `regspec/i18n.py` tiene las traducciones, incluidos los mensajes de validación. Un test verifica que todo texto de la app tenga traducción.
 
 ## Limitaciones y líneas futuras
 

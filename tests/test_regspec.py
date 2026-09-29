@@ -573,3 +573,30 @@ def test_almacen_local_guarda_lista_y_borra(tmp_path):
     assert a.borrar(g.id) and a.listar() == []
     with pytest.raises(ValueError):
         a.obtener("../../etc/passwd")
+
+
+# ---------------------------------------------------------------- idiomas
+
+def test_todos_los_textos_de_la_app_tienen_traduccion_al_portugues():
+    import ast as _ast
+    from regspec.i18n import PT
+    arbol = _ast.parse((Path(__file__).parent.parent / "app.py").read_text(encoding="utf-8"))
+    claves = {n.args[0].value for n in _ast.walk(arbol)
+              if isinstance(n, _ast.Call) and isinstance(n.func, _ast.Name) and n.func.id == "_"
+              and n.args and isinstance(n.args[0], _ast.Constant) and isinstance(n.args[0].value, str)}
+    faltan = sorted(k for k in claves if k not in PT)
+    assert not faltan, faltan
+    # los marcadores {0}, {1:.0%}... tienen que coincidir entre idiomas
+    import string
+    campos = lambda s: sorted((f, e) for _, f, e, _c in string.Formatter().parse(s) if f is not None)
+    assert all(campos(k) == campos(PT[k]) for k in claves)
+
+
+def test_traducir_mensajes_variables():
+    from regspec.grupos import MODOS, OPERADORES, TRANSFORMACIONES
+    from regspec.i18n import PT, traducir
+    assert traducir("solo en Sistema + Agente", "pt") == "só em Sistema + Agente"
+    assert traducir("'2012345678X' no cumple el patrón \\d{11}", "pt") == "'2012345678X' não cumpre o padrão \\d{11}"
+    assert traducir("1 errores en 7815 registros:", "pt") == "1 erros em 7815 registros:"
+    assert traducir("texto sin traducción", "pt") == "texto sin traducción" and traducir("Cruzar", "es") == "Cruzar"
+    assert all(v in PT for v in [*MODOS.values(), *TRANSFORMACIONES.values(), *OPERADORES] if any(ch.isalpha() for ch in v))

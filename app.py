@@ -9,6 +9,7 @@ import io
 import json
 import os
 import re
+import time
 from decimal import Decimal
 from typing import Optional
 from pathlib import Path
@@ -204,7 +205,7 @@ from regspec.almacen import AlmacenSupabase, config_equivalente, firma_archivos 
 if ss.get("sesion"):
     almacen = AlmacenSupabase(ss.sb, ss.sesion["id"], ss.sesion["workspace_id"], ss.sesion["email"])
 else:
-    almacen = AlmacenLocal(RAIZ / "cruces_guardados")
+    almacen = AlmacenLocal(RAIZ / "cruces_guardados", usuario="local")
 
 
 def formatos_del_usuario() -> dict:
@@ -264,8 +265,9 @@ ss.setdefault("cfg", None)
 ss.setdefault("cfg_nombre", None)
 ss.setdefault("cfg_ver", 0)
 
-tc, tm, t1, t2, t3, t4 = st.tabs([_(x) for x in ["🔀 Cruzar archivos", "🗂 Mis cruces", "📘 Aprender un formato (manual)",
-                                                 "📋 Especificación", "✅ Validar archivo", "🧾 Generar archivo"]])
+_pestanas = ["🔀 Cruzar archivos", "🗂 Mis cruces", "📘 Aprender un formato (manual)", "📋 Especificación",
+             "✅ Validar archivo", "🧾 Generar archivo"] + (["📊 Métricas"] if ver_config else [])
+tc, tm, t1, t2, t3, t4, *_t_met = st.tabs([_(x) for x in _pestanas])
 
 # ---------------------------------------------------------------- 1. compilar
 with t1:
@@ -500,7 +502,7 @@ with tc:
                             help=_("Aplica los mismos grupos, llaves, filtros, importes y tolerancia a los archivos nuevos."))
         g2c.write("")
         if g2c.button(_("Aplicar"), use_container_width=True):
-            aplicar_config(guardados[sel - 1] if sel else None)
+            aplicar_config(guardados[sel - 1] if sel else None, "guardado")
             st.rerun()
     cfg: Optional[ConfigCruce] = ss.cfg
     V = f"v{ss.cfg_ver}"  # sufijo de claves: cambia al aplicar una configuración y reinicia los controles
@@ -601,37 +603,116 @@ with tc:
     hojas_sel: dict = {}
     # sugerencia conjunta de llaves con todos los archivos ya subidos (se recalcula solo si cambian los archivos)
     subidos = [(gi, f) for gi in range(ss.n_grupos) for f in (ss.get(f"gfiles_{gi}") or [])]
+    # tiempo de preparación (métrica): desde que se sube el primer archivo del conjunto hasta «Cruzar»
+    if not subidos:
+        ss.t_prep = None
+    elif ss.get("t_prep") is None:
+        ss.t_prep = time.time()
     leidas = [(gi, f, tabla_silenciosa(f)) for gi, f in subidos]
     leidas = [x for x in leidas if x[2] is not None]
     sugeridas = {}
     if leidas:
         firma = tuple((gi, f.name, f.size) for gi, f, _ in leidas)
-        for (gi, f, _tabla), s in zip(leidas, llaves_sugeridas(firma, [d for _, _, d in leidas])):
+        lista_sug = llaves_sugeridas(firma, [d for _, _, d in leidas])
+        for (gi, f, _tabla), s in zip(leidas, lista_sug):
             if s is not None:
-                sugeridas[(gi, f.name)] = s
+                sugeridas[(gi, f.name)] = ([s[0]], s[1], s[2])
+        # respaldo con IA (validado): solo si el código no encontró una llave clara entre archivos de 2 o más grupos
+        from regspec.grupos import llaves_claras, sugerir_llaves_ia
+        ia_res = ss.setdefault("llaves_ia", {}).get(firma)
+        if ia_res is not None:
+            for (gi, f, _tabla), s in zip(leidas, ia_res["llaves"]):
+                if s is not None:
+                    sugeridas[(gi, f.name)] = (s[0], s[1], s[2], "ia")
+        elif (cfg is None and len({gi for gi, _f, _d in leidas}) >= 2 and not llaves_claras(lista_sug)):
+            with st.container(border=True):
+                st.markdown(_("🔎 **El código no encontró una llave clara** que vincule todos los archivos."))
+                st.caption(_("Podés elegirla a mano o pedirle una propuesta a la IA: se le envían solo los nombres de las columnas "
+                             "y 5 valores de ejemplo de cada una, y la propuesta se valida con código (las columnas tienen que existir "
+                             "y sus valores tienen que coincidir entre archivos)."))
+                if st.button(_("🤖 Pedir la llave a la IA"), key=f"ia_llave_{len(leidas)}", disabled=proveedor is None):
+                    with st.spinner(_("Consultando a la IA…")):
+                        try:
+                            r_ia = sugerir_llaves_ia([d for _, _, d in leidas], proveedor, [f.name for _, f, _ in leidas])
+                        except Exception as e:  # noqa: BLE001
+                            r_ia = None
+                            st.error(_("La IA no pudo proponer una llave: {0}").format(e))
+                        ss.ia_llamadas = ss.get("ia_llamadas", 0) + 1
+                    if r_ia is not None:
+                        ss.ia_tokens = ss.get("ia_tokens", 0) + r_ia["tokens"]
+                        ss.llaves_ia[firma] = r_ia
+                        st.rerun()
+        if ia_res is not None:
+            if ia_res["validada"]:
+                st.success(_("🤖 La IA propuso la llave y la validación la confirmó (coincidencia de valores ≥ 30 % en todos los archivos). "
+                             "Revisala abajo. Motivo: {0}").format(ia_res["motivo"]))
+            else:
+                st.warning(_("🤖 La propuesta de la IA no pasó la validación en todos los archivos; donde no la pasó se mantiene "
+                             "la sugerencia del código. Motivo: {0}").format(ia_res["motivo"]))
 
-    # memoria de configuración: si ya se cruzaron archivos con esta misma estructura, se ofrece lo aprendido
+    # memoria de configuración: si ya se cruzaron archivos con esta misma estructura, se ofrece lo aprendido.
+    # Se aplica sola solo si la confianza supera el 95 % y este usuario lo aceptó explícitamente.
+    from regspec.almacen import UMBRAL_AUTO, modo_memoria
+    from types import SimpleNamespace
     grupos_tablas = [[list(d.columns) for g_, _f, d in leidas if g_ == gi] for gi in range(ss.n_grupos)]
+    if ss.get("origen") == "memoria_auto" and cfg is not None:
+        with st.container(border=True):
+            st.markdown(_("🧠 **Se aplicó automáticamente la configuración aprendida** (confianza {0}%, mayor al {1}%, "
+                          "y aceptaste que se aplique sola). Revisala antes de cruzar.").format(ss.get("memoria_confianza"), UMBRAL_AUTO))
+            b_man, b_off, _h = st.columns([1, 1.6, 1.4])
+            if b_man.button(_("Configurar a mano"), key="auto_manual"):
+                ss.memoria_descartada = ss.get("auto_firma")
+                aplicar_config(None)
+                st.rerun()
+            if b_off.button(_("No aplicarla más automáticamente"), key="auto_off"):
+                try:
+                    almacen.fijar_auto(ss.memoria_obj, False)
+                except Exception as e:  # noqa: BLE001
+                    st.warning(str(e))
+                ss.get("mem_cache", {}).pop(ss.get("auto_firma"), None)
+                ss.origen = "memoria"  # sigue aplicada, pero ya no se aplicará sola
+                st.rerun()
     if cfg is None and all(grupos_tablas):
         firma_mem = firma_archivos(grupos_tablas)
         mc = ss.setdefault("mem_cache", {})
         if firma_mem not in mc:
             try:
-                mc[firma_mem] = almacen.memoria(firma_mem)
+                m_ = almacen.memoria(firma_mem)
+                mc[firma_mem] = (m_, almacen.acepta_auto(m_) if m_ is not None else False)
             except Exception:  # noqa: BLE001
-                mc[firma_mem] = None
-        mem = mc[firma_mem]
+                mc[firma_mem] = (None, False)
+        mem, acepto = mc[firma_mem]
         recien = {f for f, _c in ss.get("recordados", set())}  # lo que se acaba de cruzar en esta sesión no se ofrece
-        if mem is not None and ss.get("memoria_descartada") != firma_mem and firma_mem not in recien:
+        modo_mem = modo_memoria(mem, acepto)
+        if modo_mem != "nada" and ss.get("memoria_descartada") != firma_mem and firma_mem not in recien:
+            def _usar_memoria(origen_m):
+                aplicar_config(SimpleNamespace(config=mem.config, nombre=_("configuración aprendida")), origen_m, mem.id or None)
+                ss.memoria_confianza, ss.memoria_obj, ss.auto_firma = mem.confianza, mem, firma_mem
+            if modo_mem == "automatica" and ss.get("auto_aplicada") != firma_mem:
+                ss.auto_aplicada = firma_mem  # una vez por sesión: si la descarta, no se vuelve a aplicar sola
+                _usar_memoria("memoria_auto")
+                st.rerun()
             with st.container(border=True):
                 st.markdown(_("🧠 **Ya cruzaste archivos con esta misma estructura** ({0} veces, confianza {1}%).").format(
                     mem.veces_usado, mem.confianza))
                 if mem.descripcion:
                     st.caption(mem.descripcion)
+                auto_ok = False
+                if modo_mem == "ofrecer_auto":
+                    auto_ok = st.checkbox(_("Aplicarla automáticamente de ahora en más (la confianza supera el {0}%)").format(UMBRAL_AUTO),
+                                          key=f"mem_auto_{firma_mem}",
+                                          help=_("Solo para tu usuario. Si la corregís, la confianza baja y vuelve a preguntarte."))
+                else:
+                    st.caption(_("Con más usos sin cambios, cuando la confianza supere el {0}%, vas a poder aceptar que se aplique sola.").format(UMBRAL_AUTO))
                 b_ap, b_no, _h = st.columns([1.3, 1, 2])
                 if b_ap.button(_("Usar la configuración aprendida"), type="primary", key="mem_aplicar"):
-                    from types import SimpleNamespace
-                    aplicar_config(SimpleNamespace(config=mem.config, nombre=_("configuración aprendida")), "memoria", mem.id or None)
+                    if auto_ok:
+                        try:
+                            almacen.fijar_auto(mem, True)
+                            mc[firma_mem] = (mem, True)
+                        except Exception as e:  # noqa: BLE001
+                            st.warning(str(e))
+                    _usar_memoria("memoria")
                     st.rerun()
                 if b_no.button(_("Configurar a mano"), key="mem_no"):
                     ss.memoria_descartada = firma_mem
@@ -675,12 +756,13 @@ with tc:
                         tr_def = acfg.transformacion if acfg.transformacion in TRANSFORMACIONES else "exacta"
                         k_sug = "cfg"
                     else:
-                        sug = [s[0]] if s and s[0] in cols else []
+                        sug = [c for c in s[0] if c in cols] if s else []
                         tr_def = s[1] if s else "exacta"
-                        k_sug = f"{'_'.join(map(str, sug))}_{len(leidas)}"
+                        k_sug = f"{'_'.join(map(str, sug))}_{len(leidas)}{'_ia' if s and len(s) > 3 else ''}"
                     c1, c2 = st.columns([2, 1])
                     llave = c1.multiselect(_("Llave (una o varias columnas)"), cols, default=sug, placeholder=_("Elegí una o varias columnas"), key=f"llave_{gi}_{fi}_{V}_{k_sug}",
-                                           help=_("Sugerida por código: la columna cuyos valores coinciden con los de los otros archivos."))
+                                           help=_("Sugerida por la IA y validada con código.") if s and len(s) > 3 else
+                                           _("Sugerida por código: la columna cuyos valores coinciden con los de los otros archivos."))
                     tr = c2.selectbox(_("Normalizar la llave"), list(TRANSFORMACIONES), format_func=lambda k: _(TRANSFORMACIONES[k]),
                                       index=list(TRANSFORMACIONES).index(tr_def), key=f"tr_{gi}_{fi}_{V}_{k_sug}_{tr_def}")
                     if acfg is None and s and s[2] > 0 and llave == sug:
@@ -783,8 +865,11 @@ with tc:
         st.subheader(_("3 · Resultado"))
         if st.button(_("Cruzar"), type="primary"):
             grupos = [Grupo(nom, arch, modo, []) for nom, arch, modo, _ in listos]
+            seg_prep = round(time.time() - ss.t_prep, 1) if ss.get("t_prep") else None
+            t0 = time.time()
             with st.spinner(_("Cruzando…")):
                 ss.res_grupos = cruzar_grupos(grupos, comparaciones, Decimal(str(tol)))
+                seg_cruce = round(time.time() - t0, 2)
                 rg = ss.res_grupos
                 grande = max([len(rg.matriz), *[len(d) for d in rg.detalles.values()]]) > GRANDE
                 ss.res_excel = None if grande else rg.a_excel()  # los resultados grandes se exportan a pedido
@@ -802,13 +887,42 @@ with tc:
                 firma_real = firma_archivos([[list(a.df.columns) for a in arch] for _n, arch, _m, _c in listos])
                 clave_mem = (firma_real, ss.cfg_actual.model_dump_json())
                 if clave_mem not in ss.setdefault("recordados", set()):
-                    corregida = (ss.get("origen") == "memoria" and ss.get("memoria_cfg") is not None
+                    de_memoria = str(ss.get("origen") or "").startswith("memoria")
+                    corregida = (de_memoria and ss.get("memoria_cfg") is not None
                                  and not config_equivalente(ss.cfg_actual, ss.memoria_cfg))
+                    # llave de la IA: ¿quedó la que propuso (validada)?
+                    ia_res = ss.get("llaves_ia", {}).get(tuple((gi, f.name, f.size) for gi, f, _ in leidas)) if leidas else None
+                    ia_ok = None
+                    if ia_res is not None:
+                        prop = {(gi, f.name): s for (gi, f, _d), s in zip(leidas, ia_res["llaves"]) if s is not None}
+                        usadas = [(gi, a) for gi, (_n, arch, _m, _c) in enumerate(listos) for a in arch]
+                        ia_ok = bool(prop) and ia_res["validada"] and all(
+                            (gi, a.nombre) in prop and prop[(gi, a.nombre)][0] == a.llave for gi, a in usadas)
+                        if ia_ok and not de_memoria and ss.get("origen") != "guardado":
+                            ss.origen = "ia"
                     mem = almacen.recordar(firma_real, ss.cfg_actual, corregida, " vs ".join(n for n, *_ in listos))
                     ss.recordados.add(clave_mem)
                     ss.memoria_id = mem.id if (mem is not None and almacen.remoto) else None
-                    ss.aceptada = (not corregida) if ss.get("origen") == "memoria" else None
+                    ss.aceptada = (not corregida) if de_memoria else (ia_ok if ia_res is not None else None)
                     ss.get("mem_cache", {}).pop(firma_real, None)
+                    rg = ss.res_grupos
+                    try:
+                        almacen.registrar_evento({
+                            "firma_archivos": firma_real, "origen": ss.get("origen") or "heuristica",
+                            "memoria_confianza": ss.get("memoria_confianza") if de_memoria else None,
+                            "aceptada": ss.aceptada, "corregida": corregida if de_memoria else None,
+                            "segundos_preparacion": seg_prep, "segundos_cruce": seg_cruce, "n_grupos": len(listos),
+                            "n_archivos": sum(len(arch) for _n, arch, _m, _c in listos),
+                            "filas": int(sum(len(a.df) for _n, arch, _m, _c in listos for a in arch)),
+                            "llaves": int(len(rg.matriz)),
+                            "con_diferencias": int(str(rg.resumen.get("en todos, con diferencias", 0)) or 0),
+                            "llamadas_ia": int(ss.get("ia_llamadas", 0)), "tokens_ia": int(ss.get("ia_tokens", 0)),
+                            "ia_llave_validada": ia_ok, "idioma": ss.idioma})
+                        ss.ia_ult = (int(ss.get("ia_llamadas", 0)), int(ss.get("ia_tokens", 0)))
+                        ss.ia_llamadas = ss.ia_tokens = 0  # cada evento cuenta solo sus propias llamadas
+                    except Exception as e:  # noqa: BLE001
+                        st.caption(f"{_('No se pudo registrar la métrica')}: {e}")
+                    ss.t_prep = time.time()  # el próximo cruce mide su propia preparación
             except Exception as e:  # noqa: BLE001
                 st.warning(f"{_('No se pudo actualizar la memoria de configuración')}: {e}")
         r = ss.get("res_grupos")
@@ -853,7 +967,7 @@ with tc:
                                 ss.res_excel = excel = r.a_excel()
                         g = almacen.guardar(nombre_c, ss.cfg_actual, r.resumen, ss.get("archivos_actual", []), excel,
                                             usuario_actual(), notas, ss.get("origen") or "heuristica", ss.get("aceptada"),
-                                            ss.get("memoria_id"))
+                                            ss.get("memoria_id"), *ss.get("ia_ult", (0, 0)))
                         st.success(_('Guardado «{0}». Lo encontrás en la pestaña «Mis cruces» y arriba, en «Partir de un cruce guardado».').format(g.nombre))
     elif any(g is None for g in grupos_ui):
         st.caption(_("Para probar: Grupo 1 = ejemplos/grupos/g1_retenciones_sistema.csv + g1_padron_referencia.csv "
@@ -894,8 +1008,47 @@ with tm:
             if xl:
                 x1.download_button(_("Descargar Excel"), xl, f"{re.sub(r'[^A-Za-z0-9_-]+', '_', g.nombre)[:60]}.xlsx", key=f"dl_{g.id}")
             if x2.button(_("Reutilizar configuración"), key=f"reu_{g.id}"):
-                aplicar_config(g)
+                aplicar_config(g, "guardado")
                 st.rerun()
             if x3.checkbox(_("Borrar"), key=f"conf_{g.id}") and x3.button(_("Confirmar borrado"), key=f"del_{g.id}"):
                 almacen.borrar(g.id)
                 st.rerun()
+
+
+# ---------------------------------------------------------------- métricas (solo administradoras)
+if _t_met:
+    with _t_met[0]:
+        from regspec import metricas as met
+        st.caption(_("Uso real de la herramienta para el capítulo de resultados: cada «Cruzar» deja un registro con el origen de la "
+                     "configuración, si se aceptó o se corrigió, el tiempo de preparación y el uso de IA."))
+        if st.button(_("Actualizar"), key="met_actualizar"):
+            ss.pop("met_datos", None)
+        if "met_datos" not in ss:
+            try:
+                ss.met_datos = (almacen.eventos(), almacen.memorias())
+            except Exception as e:  # noqa: BLE001
+                st.error(f"{_('No se pudieron leer las métricas')}: {e}")
+                ss.met_datos = ([], [])
+        eventos, memorias = ss.met_datos
+        if almacen.remoto and not almacen.es_admin():
+            st.info(_("Solo ves los cruces de tu espacio de trabajo."))
+        if not eventos:
+            st.info(_("Todavía no hay cruces registrados."))
+        else:
+            r_met = met.resumen(eventos)
+            k = st.columns(4)
+            k[0].metric(_("Cruces"), r_met["cruces"])
+            k[1].metric(_("Con configuración aprendida"), r_met["cruces con configuración aprendida"])
+            k[2].metric(_("Aceptación de lo aprendido"), "–" if r_met["tasa de aceptación de lo aprendido (%)"] is None
+                        else f"{r_met['tasa de aceptación de lo aprendido (%)']}%")
+            k[3].metric(_("Ahorro de preparación"), "–" if r_met["ahorro de tiempo de preparación (%)"] is None
+                        else f"{r_met['ahorro de tiempo de preparación (%)']}%")
+            st.dataframe(_df(pd.DataFrame([(_(a.strip()), "–" if v is None else str(v)) for a, v in r_met.items()],
+                                          columns=["indicador", "valor"])), hide_index=True, width="stretch")
+            st.markdown(_("**Por origen de la configuración**"))
+            st.dataframe(_df(met.por_origen(eventos)), hide_index=True, width="stretch")
+            evo = met.evolucion_confianza(eventos)
+            if len(evo):
+                st.markdown(_("**Evolución de la confianza de la memoria**"))
+                st.line_chart(evo.pivot_table(index="uso", columns="firma_archivos", values="memoria_confianza"))
+            st.download_button(_("Descargar métricas (Excel)"), met.a_excel(eventos, memorias), "metricas_uso.xlsx")

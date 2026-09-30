@@ -654,3 +654,69 @@ def test_memoria_de_configuracion_local(tmp_path):
     assert (m.veces_usado, m.veces_corregido, m.confianza) == (2, 1, confianza(2, 1)) and m.descripcion == "A vs B"
     assert a.memoria(f1).config == otra and a.listar() == []  # la memoria no aparece como cruce guardado
     assert confianza(10, 0) > confianza(3, 0) > confianza(3, 2)
+
+
+def test_umbral_de_aplicacion_automatica_y_aceptacion_por_usuario(tmp_path):
+    from regspec.almacen import UMBRAL_AUTO, AlmacenLocal, ArchivoCfg, ConfigCruce, GrupoCfg, confianza, modo_memoria
+    cfg = ConfigCruce(grupos=[GrupoCfg(nombre="A", archivos=[ArchivoCfg(llave=["x"])]),
+                              GrupoCfg(nombre="B", archivos=[ArchivoCfg(llave=["y"])])])
+    ana, bea = AlmacenLocal(tmp_path, usuario="ana"), AlmacenLocal(tmp_path, usuario="bea")
+    m = None
+    for _ in range(20):
+        m = ana.recordar("f", cfg, False)
+    assert m.confianza == confianza(20, 0) == UMBRAL_AUTO and modo_memoria(m, True) == "ofrecer"  # 95 % no alcanza: debe superarlo
+    m = ana.recordar("f", cfg, False)
+    assert m.confianza > UMBRAL_AUTO
+    assert modo_memoria(m, ana.acepta_auto(m)) == "ofrecer_auto"  # supera el umbral, pero nadie lo aceptó
+    ana.fijar_auto(m, True)
+    m = ana.memoria("f")
+    assert modo_memoria(m, ana.acepta_auto(m)) == "automatica"
+    assert modo_memoria(m, bea.acepta_auto(m)) == "ofrecer_auto"  # la aceptación es por usuario
+    m = ana.recordar("f", cfg, True)  # una corrección baja la confianza: deja de aplicarse sola
+    assert modo_memoria(m, ana.acepta_auto(m)) == "ofrecer"
+    ana.fijar_auto(m, False)
+    assert not ana.acepta_auto(ana.memoria("f")) and modo_memoria(None, True) == "nada"
+
+
+def test_llave_por_ia_como_respaldo_validado():
+    import pandas as pd
+    from regspec.grupos import llaves_claras, sugerir_llaves, sugerir_llaves_ia
+    A = pd.DataFrame({"comp": ["A-0001", "A-0002", "A-0003", "A-0004"], "imp": ["1", "2", "3", "4"]})
+    B = pd.DataFrame({"referencia_ext": ["0001", "0002", "0003", "0099"], "importe": ["150", "250", "350", "9"]})
+    assert llaves_claras([("c", "exacta", 1.0), ("d", "exacta", 0.8)]) and not llaves_claras([("c", "exacta", 1.0), ("d", "exacta", 0.2)])
+    assert not llaves_claras([("c", "exacta", 1.0), None])
+    assert len(sugerir_llaves([A, B])) == 2
+    # propuesta válida: normalización desconocida -> exacta, y la validación prueba «solo números» (A-0001 ~ 0001)
+    prov = Guionado([json.dumps({"llaves": [["comp"], ["referencia_ext"]], "normalizacion": "rara", "motivo": "comprobante"})])
+    r = sugerir_llaves_ia([A, B], prov)
+    assert r["validada"] and r["llaves"][1][0] == ["referencia_ext"] and r["llaves"][1][1] == "solo_numeros"
+    assert round(r["llaves"][1][2], 2) == 0.75 and r["motivo"] == "comprobante"
+    # columna inventada: no se acepta
+    prov = Guionado([json.dumps({"llaves": [["comp"], ["inventada"]], "normalizacion": "exacta"})])
+    r = sugerir_llaves_ia([A, B], prov)
+    assert not r["validada"] and r["llaves"] == [None, None]
+    # columnas reales pero sin valores en común: la validación la rechaza
+    prov = Guionado([json.dumps({"llaves": [["comp"], ["importe"]], "normalizacion": "exacta"})])
+    r = sugerir_llaves_ia([A, B], prov)
+    assert not r["validada"] and r["llaves"][1] is None
+
+
+def test_metricas_de_uso(tmp_path):
+    from regspec import metricas
+    from regspec.almacen import AlmacenLocal
+    a = AlmacenLocal(tmp_path, usuario="ana")
+    ev = [dict(firma_archivos="f", origen="heuristica", segundos_preparacion=300, segundos_cruce=2),
+          dict(firma_archivos="f", origen="memoria", memoria_confianza=67, corregida=False, aceptada=True, segundos_preparacion=60),
+          dict(firma_archivos="f", origen="memoria", memoria_confianza=75, corregida=True, aceptada=False, segundos_preparacion=120),
+          dict(firma_archivos="g", origen="ia", llamadas_ia=1, tokens_ia=900, ia_llave_validada=True, segundos_preparacion=200)]
+    for e in ev:
+        a.registrar_evento(e)
+    eventos = a.eventos()
+    assert len(eventos) == 4 and eventos[0]["usuario"] == "ana"
+    r = metricas.resumen(eventos)
+    assert r["cruces"] == 4 and r["cruces con configuración aprendida"] == 2 and r["tasa de aceptación de lo aprendido (%)"] == 50.0
+    assert r["preparación mediana a mano (s)"] == 300 and r["preparación mediana reutilizando (s)"] == 90
+    assert r["ahorro de tiempo de preparación (%)"] == 70.0 and r["tokens de IA"] == 900 and r["  propuesta de la IA validada"] == 1
+    assert list(metricas.evolucion_confianza(eventos)["uso"]) == [1, 2]
+    assert metricas.a_excel(eventos, a.memorias())[:2] == b"PK"
+    assert metricas.resumen([])["cruces"] == 0

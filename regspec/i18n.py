@@ -247,6 +247,59 @@ PT: dict[str, str] = {
     "llaves en el universo": "chaves no universo", "en todos los grupos": "em todos os grupos",
     "en todos, con diferencias": "em todos, com diferenças", "en todos, iguales": "em todos, iguais", "tolerancia": "tolerância",
     "concatenar": "concatenar", "base_referencia": "base + referência", "sumar_por_llave": "somar por chave",
+    # memoria con umbral, IA para la llave y métricas
+    "**Evolución de la confianza de la memoria**": "**Evolução da confiança da memória**",
+    "**Por origen de la configuración**": "**Por origem da configuração**",
+    "Aceptación de lo aprendido": "Aceitação do aprendido",
+    "Actualizar": "Atualizar",
+    "Ahorro de preparación": "Economia de preparação",
+    "Aplicarla automáticamente de ahora en más (la confianza supera el {0}%)": "Aplicá-la automaticamente daqui em diante (a confiança supera {0}%)",
+    "Con configuración aprendida": "Com configuração aprendida",
+    "Con más usos sin cambios, cuando la confianza supere el {0}%, vas a poder aceptar que se aplique sola.":
+        "Com mais usos sem mudanças, quando a confiança superar {0}%, você poderá aceitar que ela seja aplicada sozinha.",
+    "Consultando a la IA…": "Consultando a IA…",
+    "Cruces": "Cruzamentos",
+    "Descargar métricas (Excel)": "Baixar métricas (Excel)",
+    "La IA no pudo proponer una llave: {0}": "A IA não conseguiu propor uma chave: {0}",
+    "No aplicarla más automáticamente": "Não aplicá-la mais automaticamente",
+    "No se pudieron leer las métricas": "Não foi possível ler as métricas",
+    "No se pudo registrar la métrica": "Não foi possível registrar a métrica",
+    "Podés elegirla a mano o pedirle una propuesta a la IA: se le envían solo los nombres de las columnas y 5 valores de ejemplo de cada una, y la propuesta se valida con código (las columnas tienen que existir y sus valores tienen que coincidir entre archivos).":
+        "Você pode escolhê-la manualmente ou pedir uma proposta à IA: são enviados apenas os nomes das colunas e 5 valores de exemplo de cada uma, e a proposta é validada por código (as colunas precisam existir e seus valores precisam coincidir entre os arquivos).",
+    "Solo para tu usuario. Si la corregís, la confianza baja y vuelve a preguntarte.":
+        "Só para o seu usuário. Se você a corrigir, a confiança cai e ela volta a perguntar.",
+    "Solo ves los cruces de tu espacio de trabajo.": "Você só vê os cruzamentos do seu espaço de trabalho.",
+    "Sugerida por la IA y validada con código.": "Sugerida pela IA e validada por código.",
+    "Todavía no hay cruces registrados.": "Ainda não há cruzamentos registrados.",
+    "Uso real de la herramienta para el capítulo de resultados: cada «Cruzar» deja un registro con el origen de la configuración, si se aceptó o se corrigió, el tiempo de preparación y el uso de IA.":
+        "Uso real da ferramenta para o capítulo de resultados: cada «Cruzar» deixa um registro com a origem da configuração, se foi aceita ou corrigida, o tempo de preparação e o uso de IA.",
+    "🔎 **El código no encontró una llave clara** que vincule todos los archivos.":
+        "🔎 **O código não encontrou uma chave clara** que vincule todos os arquivos.",
+    "🤖 La IA propuso la llave y la validación la confirmó (coincidencia de valores ≥ 30 % en todos los archivos). Revisala abajo. Motivo: {0}":
+        "🤖 A IA propôs a chave e a validação a confirmou (coincidência de valores ≥ 30 % em todos os arquivos). Revise-a abaixo. Motivo: {0}",
+    "🤖 La propuesta de la IA no pasó la validación en todos los archivos; donde no la pasó se mantiene la sugerencia del código. Motivo: {0}":
+        "🤖 A proposta da IA não passou na validação em todos os arquivos; onde não passou, mantém-se a sugestão do código. Motivo: {0}",
+    "🤖 Pedir la llave a la IA": "🤖 Pedir a chave à IA",
+    "🧠 **Se aplicó automáticamente la configuración aprendida** (confianza {0}%, mayor al {1}%, y aceptaste que se aplique sola). Revisala antes de cruzar.":
+        "🧠 **A configuração aprendida foi aplicada automaticamente** (confiança {0}%, maior que {1}%, e você aceitou que ela seja aplicada sozinha). Revise-a antes de cruzar.",
+    "📊 Métricas": "📊 Métricas", "cruces": "cruzamentos",
+    "preparación mediana (s)": "preparação mediana (s)", "corregidas": "corrigidas", "tokens IA": "tokens IA",
+    "usuarios": "usuários", "estructuras distintas (firmas)": "estruturas distintas (assinaturas)",
+    "cruces con configuración aprendida": "cruzamentos com configuração aprendida",
+    "aceptada sin cambios": "aceita sem mudanças", "corregida por el usuario": "corrigida pelo usuário",
+    "tasa de aceptación de lo aprendido (%)": "taxa de aceitação do aprendido (%)",
+    "aplicadas solas (> 95 % y aceptado)": "aplicadas sozinhas (> 95 % e aceito)",
+    "preparación mediana a mano (s)": "preparação mediana manual (s)",
+    "preparación mediana reutilizando (s)": "preparação mediana reutilizando (s)",
+    "ahorro de tiempo de preparación (%)": "economia de tempo de preparação (%)",
+    "cruces que pidieron la llave a la IA": "cruzamentos que pediram a chave à IA",
+    "propuesta de la IA validada": "proposta da IA validada", "llamadas a la IA": "chamadas à IA", "tokens de IA": "tokens de IA",
+    "cruce mediano (s)": "cruzamento mediano (s)",
+    "Armado a mano (sugerencia por código)": "Montado manualmente (sugestão por código)",
+    "Llave sugerida por IA (validada)": "Chave sugerida pela IA (validada)",
+    "Configuración aprendida (ofrecida)": "Configuração aprendida (oferecida)",
+    "Configuración aprendida (aplicada sola, > 95 %)": "Configuração aprendida (aplicada sozinha, > 95 %)",
+    "Cruce guardado reutilizado": "Cruzamento salvo reutilizado",
 }
 
 # mensajes variables del núcleo (validación y resúmenes del cruce)

@@ -13,6 +13,13 @@ Memoria de configuración (aprendizaje por uso): cada vez que se cruza, la confi
 **firma** de los archivos (su estructura: columnas por grupo, no sus nombres ni su contenido). Cuando llegan archivos
 con la misma firma, se sugiere la configuración aprendida. La confianza sube cuando se usa sin cambios y baja cuando
 el usuario la corrige.
+
+Aplicación automática: una configuración aprendida se aplica sola solo si su confianza supera el 95 % **y** el usuario
+aceptó explícitamente que se aplique sola (la aceptación es por usuario y se puede retirar). En los demás casos se
+ofrece y el usuario decide.
+
+Métricas: cada «Cruzar» deja un evento (origen de la configuración, si se aceptó o corrigió, tiempos, uso de IA), que
+alimenta el capítulo de resultados.
 """
 from __future__ import annotations
 
@@ -81,6 +88,20 @@ class Memoria(BaseModel):
     veces_usado: int = 0
     veces_corregido: int = 0
     descripcion: str = ""
+    auto_usuarios: list[str] = Field(default_factory=list)  # solo en el almacén local
+
+
+UMBRAL_AUTO = 95  # confianza (en %) que hay que SUPERAR para poder aplicar sola una configuración aprendida
+
+
+def modo_memoria(mem: Optional["Memoria"], acepto_auto: bool) -> str:
+    """Qué hacer con una configuración aprendida: 'nada', 'ofrecer' (el usuario decide), 'ofrecer_auto' (supera el
+    umbral: además de usarla, se puede aceptar que se aplique sola) o 'automatica' (supera el umbral y el usuario lo aceptó)."""
+    if mem is None:
+        return "nada"
+    if mem.confianza > UMBRAL_AUTO:
+        return "automatica" if acepto_auto else "ofrecer_auto"
+    return "ofrecer"
 
 
 def _norm_col(c) -> str:
@@ -127,6 +148,23 @@ class Almacen:
     def recordar(self, firma: str, config: ConfigCruce, corregida: bool, descripcion: str = "") -> Optional[Memoria]:
         return None
 
+    def acepta_auto(self, mem: Memoria) -> bool:
+        """¿El usuario actual aceptó que esta configuración aprendida se aplique sola?"""
+        return False
+
+    def fijar_auto(self, mem: Memoria, aceptar: bool) -> None:
+        return None
+
+    # métricas
+    def registrar_evento(self, evento: dict) -> None:
+        return None
+
+    def eventos(self) -> list[dict]:
+        return []
+
+    def memorias(self) -> list[dict]:
+        return []
+
     # formatos aprendidos (especificaciones)
     def formatos(self) -> dict[str, dict]:
         return {}
@@ -136,7 +174,7 @@ class Almacen:
 
     def guardar(self, nombre: str, config: ConfigCruce, resumen: dict, archivos: list[str], excel: Optional[bytes],
                 usuario: str = "local", notas: str = "", origen: str = "heuristica", aceptada: Optional[bool] = None,
-                memoria_id: Optional[str] = None) -> CruceGuardado:
+                memoria_id: Optional[str] = None, llamadas_ia: int = 0, tokens_ia: int = 0) -> CruceGuardado:
         raise NotImplementedError
 
     def listar(self, usuario: Optional[str] = None) -> list[CruceGuardado]:
@@ -153,8 +191,9 @@ class Almacen:
 
 
 class AlmacenLocal(Almacen):
-    def __init__(self, carpeta: Path | str):
+    def __init__(self, carpeta: Path | str, usuario: str = "local"):
         self.carpeta = Path(carpeta)
+        self.usuario = usuario
 
     def _ruta(self, id_: str, ext: str) -> Path:
         if not re.fullmatch(r"[0-9a-f]{32}", id_):
@@ -195,6 +234,45 @@ class AlmacenLocal(Almacen):
         self.carpeta.mkdir(parents=True, exist_ok=True)
         (self.carpeta / "memoria.json").write_text(json.dumps(todas, ensure_ascii=False, indent=1), encoding="utf-8")
         return m
+
+    def _usuario(self):
+        return getattr(self, "usuario", "local")
+
+    def acepta_auto(self, mem):
+        return self._usuario() in (mem.auto_usuarios or [])
+
+    def fijar_auto(self, mem, aceptar):
+        todas = self._memorias()
+        if mem.firma not in todas:
+            return
+        m = Memoria.model_validate(todas[mem.firma])
+        u = self._usuario()
+        m.auto_usuarios = sorted(set(m.auto_usuarios) | {u}) if aceptar else [x for x in m.auto_usuarios if x != u]
+        todas[mem.firma] = m.model_dump()
+        (self.carpeta / "memoria.json").write_text(json.dumps(todas, ensure_ascii=False, indent=1), encoding="utf-8")
+
+    def registrar_evento(self, evento):
+        self.carpeta.mkdir(parents=True, exist_ok=True)
+        e = {"created_at": datetime.now().isoformat(timespec="seconds"), "usuario": self._usuario(), **evento}
+        with (self.carpeta / "eventos.jsonl").open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(e, ensure_ascii=False, default=str) + "\n")
+
+    def eventos(self):
+        p = self.carpeta / "eventos.jsonl"
+        if not p.exists():
+            return []
+        out = []
+        for linea in p.read_text(encoding="utf-8").splitlines():
+            try:
+                out.append(json.loads(linea))
+            except Exception:  # noqa: BLE001
+                continue
+        return out
+
+    def memorias(self):
+        return [{"firma_archivos": m.get("firma"), "descripcion": m.get("descripcion", ""), "confianza": m.get("confianza"),
+                 "veces_usado": m.get("veces_usado"), "veces_corregido": m.get("veces_corregido"),
+                 "auto_aceptada": bool(m.get("auto_usuarios"))} for m in self._memorias().values()]
 
     def listar(self, usuario=None):
         if not self.carpeta.exists():
@@ -246,11 +324,12 @@ class AlmacenSupabase(Almacen):
                              resumen=f.get("resumen_resultado") or {}, archivos=f.get("archivos") or [], notas=f.get("notas") or "")
 
     def guardar(self, nombre, config, resumen, archivos, excel, usuario="", notas="", origen="heuristica", aceptada=None,
-                memoria_id=None):
+                memoria_id=None, llamadas_ia=0, tokens_ia=0):
         fila = {"workspace_id": self.ws, "usuario_id": self.uid, "nombre": nombre.strip() or "Cruce sin nombre",
                 "archivos": archivos, "configuracion_cruce": config.model_dump(), "notas": notas,
                 "resumen_resultado": {k: str(v) for k, v in resumen.items()}, "origen_sugerencia": origen,
-                "sugerencia_aceptada": aceptada, "memoria_id": memoria_id or None}
+                "sugerencia_aceptada": aceptada, "memoria_id": memoria_id or None,
+                "llamadas_ia": int(llamadas_ia or 0), "tokens_ia": int(tokens_ia or 0)}
         f = self.c.table("conciliacion").insert(fila).execute().data[0]
         if excel is not None:
             ruta = f"{self.uid}/{f['id']}.xlsx"
@@ -311,6 +390,46 @@ class AlmacenSupabase(Almacen):
             fila["descripcion"] = descripcion
         f = self.c.table("memoria_conciliacion").upsert(fila, on_conflict="workspace_id,firma_archivos").execute().data[0]
         return self._a_memoria(f)
+
+    def acepta_auto(self, mem):
+        if not mem.id:
+            return False
+        return bool(self.c.table("memoria_autoaplicar").select("memoria_id").eq("memoria_id", mem.id)
+                    .eq("usuario_id", self.uid).execute().data)
+
+    def fijar_auto(self, mem, aceptar):
+        if not mem.id:
+            return
+        if aceptar:
+            self.c.table("memoria_autoaplicar").upsert({"memoria_id": mem.id, "usuario_id": self.uid},
+                                                       on_conflict="memoria_id,usuario_id").execute()
+        else:
+            self.c.table("memoria_autoaplicar").delete().eq("memoria_id", mem.id).eq("usuario_id", self.uid).execute()
+
+    # métricas (con RLS: cada una ve su workspace; las administradoras, todos)
+    def registrar_evento(self, evento):
+        self.c.table("evento_cruce").insert({"workspace_id": self.ws, "usuario_id": self.uid, **evento}).execute()
+
+    def es_admin(self) -> bool:
+        try:
+            return bool(self.c.rpc("soy_admin").execute().data)
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _todo(self, tabla: str, columnas: str = "*") -> list[dict]:
+        out, desde = [], 0
+        while True:
+            parte = self.c.table(tabla).select(columnas).order("created_at").range(desde, desde + 999).execute().data
+            out += parte
+            if len(parte) < 1000:
+                return out
+            desde += 1000
+
+    def eventos(self):
+        return self._todo("evento_cruce")
+
+    def memorias(self):
+        return self._todo("memoria_conciliacion", "workspace_id,firma_archivos,descripcion,confianza,veces_usado,veces_corregido,created_at,updated_at")
 
     # formatos aprendidos
     def formatos(self):

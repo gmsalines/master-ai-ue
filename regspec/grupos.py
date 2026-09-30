@@ -17,6 +17,7 @@ mayúsculas sin espacios); tolerancia (en importes); exclusión (filtros previos
 from __future__ import annotations
 
 import io
+import json
 import re
 import unicodedata
 from dataclasses import dataclass, field
@@ -439,3 +440,87 @@ def sugerir_llaves(tablas: list[pd.DataFrame]) -> list[Optional[tuple[str, str, 
             return (s.nunique() / max(1, len(s))) + puntaje_nombre(str(c))
         out.append((max(cs, key=score), "exacta", 0.0))
     return out
+
+
+# ------------------------------------------------------------------ llave con IA: respaldo validado del código
+
+
+UMBRAL_LLAVE_CLARA = 0.6
+
+
+def llaves_claras(sugeridas: list, umbral: float = UMBRAL_LLAVE_CLARA) -> bool:
+    """El código encontró una llave clara si todas las tablas (salvo el ancla) cubren al menos `umbral` del ancla."""
+    if len(sugeridas) < 2 or any(s is None for s in sugeridas):
+        return False
+    return all(s[2] >= umbral for s in sugeridas[1:])
+
+
+def _llave_compuesta(df: pd.DataFrame, cols: list[str], tr: str) -> set:
+    partes = [transformar_serie(df[c], tr) for c in cols]
+    k = partes[0]
+    for p in partes[1:]:
+        k = k + "|" + p
+    vacia = "|".join([""] * len(cols))
+    return set(pd.unique(k)) - {"", vacia}
+
+
+def cobertura_llave(ancla: pd.DataFrame, cols_ancla: list[str], df: pd.DataFrame, cols: list[str], tr: str) -> float:
+    """Contención (en la dirección más favorable) entre la llave del ancla y la de otra tabla."""
+    a, b = _llave_compuesta(ancla, cols_ancla, tr), _llave_compuesta(df, cols, tr)
+    if not a or not b:
+        return 0.0
+    return len(a & b) / min(len(a), len(b))
+
+
+def sugerir_llaves_ia(tablas: list[pd.DataFrame], proveedor, nombres: Optional[list[str]] = None, muestras: int = 5,
+                      umbral: float = 0.3) -> dict:
+    """Pide al LLM la llave de cada tabla cuando el código no encontró una clara. Respaldo **validado**:
+
+    1. al LLM solo se le envían nombres de columna y `muestras` valores de ejemplo por columna;
+    2. se descartan columnas inventadas y normalizaciones desconocidas;
+    3. la llave propuesta se comprueba midiendo, con código, la cobertura de valores contra el ancla; una tabla
+       queda con la llave de la IA solo si la cobertura alcanza `umbral`.
+
+    Devuelve {"llaves": [(columnas, transformacion, cobertura) | None por tabla], "validada": bool,
+    "motivo": str, "tokens": int}.
+    """
+    nombres = nombres or [f"tabla_{i + 1}" for i in range(len(tablas))]
+
+    def perfil(df):
+        return {str(c): [str(v)[:40] for v in _muestra(df[c], muestras).head(muestras)]
+                for c in df.columns if not str(c).startswith("_")}
+
+    tablas_txt = "\n".join(f"{i}. {n}: {json.dumps(perfil(df), ensure_ascii=False)}" for i, (n, df) in enumerate(zip(nombres, tablas)))
+    pedido = (
+        "Quiero conciliar estas tablas: hay que encontrar en cada una la(s) columna(s) que identifican el mismo "
+        "registro (la llave), para poder cruzarlas. Columnas con ejemplos de valores:\n"
+        f"{tablas_txt}\n"
+        "Todas las llaves deben tener la misma cantidad de columnas y el mismo significado, en el mismo orden. "
+        f"Normalizaciones posibles: {', '.join(TRANSFORMACIONES)} (una sola, común a todas). "
+        'Respondé SOLO JSON: {"llaves": [["col", ...] por tabla, en orden], "normalizacion": "…", "motivo": "breve"}. '
+        "Usá exactamente los nombres de columna dados."
+    )
+    r = proveedor.completar([{"role": "user", "content": pedido}], modo_json=True, temperatura=0.0, max_tokens=800)
+    t = r.texto
+    d = json.loads(t[t.find("{"): t.rfind("}") + 1])
+    tokens = int(getattr(r, "tokens_entrada", 0) or 0) + int(getattr(r, "tokens_salida", 0) or 0)
+    tr = d.get("normalizacion") if d.get("normalizacion") in TRANSFORMACIONES else "exacta"
+    propuestas = list(d.get("llaves") or [])
+    propuestas += [[]] * (len(tablas) - len(propuestas))
+    cols = []
+    for df, p in zip(tablas, propuestas):
+        p = [p] if isinstance(p, str) else list(p or [])
+        cols.append([c for c in p if c in df.columns])
+    n = len(cols[0])
+    out: list = [None] * len(tablas)
+    if n and all(len(c) == n for c in cols):
+        def evaluar(tr_):
+            cobs = [cobertura_llave(tablas[0], cols[0], df, c, tr_) for df, c in zip(tablas[1:], cols[1:])]
+            return [(cols[0], tr_, 1.0)] + [(c, tr_, cob) if cob >= umbral else None for c, cob in zip(cols[1:], cobs)]
+        out = evaluar(tr)
+        if tr == "exacta" and any(x is None for x in out):  # segunda oportunidad: la misma llave, solo números
+            alt = evaluar("solo_numeros")
+            if sum(x is not None for x in alt) > sum(x is not None for x in out):
+                out = alt
+    validada = all(x is not None for x in out)
+    return {"llaves": out, "validada": validada, "motivo": str(d.get("motivo", ""))[:300], "tokens": tokens}

@@ -119,14 +119,30 @@ with st.sidebar:
                     del ss[k]
             st.rerun()
         st.divider()
-    st.header(_("Modelo"))
-    opcion = st.selectbox(_("Proveedor"), ["groq", "gemini", "openai", "openrouter", "ollama", "anthropic", "sin IA (línea base)"],
-                          format_func=_)
+    def _secreto(nombre):
+        try:
+            v = st.secrets.get(nombre, "")  # Streamlit Cloud: Settings -> Secrets
+        except Exception:  # noqa: BLE001 (sin archivo de secrets en local)
+            v = ""
+        return v or os.environ.get(nombre, "")
+
+    # Con login, la configuración del modelo solo la ven las administradoras (secret ADMINS = "mail1, mail2").
+    # El resto usa el modelo por defecto con la clave de los Secrets, que nunca se muestra.
+    _admins = {m.strip().lower() for m in str(_secreto("ADMINS") or "").replace(";", ",").split(",") if m.strip()}
+    ver_config = not ss.get("sesion") or ss.sesion["email"].lower() in _admins
+    if ver_config:
+        st.header(_("Modelo"))
+        opcion = st.selectbox(_("Proveedor"), ["groq", "gemini", "openai", "openrouter", "ollama", "anthropic", "sin IA (línea base)"],
+                              format_func=_)
+    else:
+        opcion = "groq"
     if opcion == "sin IA (línea base)":
         proveedor = None
     else:
         defecto = PRESETS.get(opcion, (None, None, "claude-haiku-4-5-20251001"))[2]
-        if opcion == "groq":
+        if not ver_config:
+            modelo = "openai/gpt-oss-120b"
+        elif opcion == "groq":
             modelo = st.selectbox(_("Modelo"), ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "(otro)"], format_func=_,
                                   help=_("Cada modelo tiene su propio cupo diario en el plan gratuito."))
             if modelo == "(otro)":
@@ -134,28 +150,32 @@ with st.sidebar:
         else:
             modelo = st.text_input(_("Modelo"), defecto)
         env = PRESETS.get(opcion, (None, "ANTHROPIC_API_KEY", None))[1] if opcion != "anthropic" else "ANTHROPIC_API_KEY"
-        def _secreto(nombre):
-            try:
-                return st.secrets.get(nombre, "")  # Streamlit Cloud: Settings -> Secrets
-            except Exception:  # noqa: BLE001 (sin archivo de secrets en local)
-                return ""
-        clave = st.text_input(_("API key"), value=os.environ.get(env or "", "") or _secreto(env or ""), type="password",
-                              help=_("No se guarda; solo se usa en esta sesión.")) if env else None
+        clave_config = os.environ.get(env or "", "") or _secreto(env or "")
+        clave = None
+        if env:
+            # la clave configurada nunca se muestra en pantalla: el campo queda vacío y solo reemplaza si se escribe otra
+            escrita = st.text_input(_("API key"), value="", type="password",
+                                    placeholder=_("(usa la clave configurada)") if clave_config else "",
+                                    help=_("No se guarda; solo se usa en esta sesión.")) if ver_config else ""
+            clave = escrita or clave_config
         if opcion == "anthropic":
             proveedor = Anthropic(modelo=modelo, api_key=clave)
         else:
             extra = {"reasoning_effort": "low"} if ("gpt-oss" in modelo and opcion == "groq") else {}
             proveedor = OpenAICompatible(modelo=modelo, base_url=PRESETS[opcion][0], api_key=clave, nombre=opcion, extra=extra)
-    max_it = st.slider(_("Máximo de iteraciones de autocorrección"), 1, 6, 4)
-    usar_cache = st.checkbox(_("Reutilizar respuestas guardadas (no gasta tokens al repetir)"), value=True)
-    modo = st.radio(_("Modo de extracción"), ["secciones", "completo"], format_func=_,
-                    help=_("Secciones: una llamada por parte (entra en los planes gratuitos). Completo: una sola respuesta."))
-    st.divider()
-    st.caption(_("Cargar una especificación existente"))
-    subida = st.file_uploader(_("spec.json"), type=["json"], key="spec_json")
-    if subida is not None and st.button(_("Usar esta especificación")):
-        d = json.loads(subida.read())
-        ss.spec = Especificacion.model_validate(d.get("spec", d))
+    if ver_config:
+        max_it = st.slider(_("Máximo de iteraciones de autocorrección"), 1, 6, 4)
+        usar_cache = st.checkbox(_("Reutilizar respuestas guardadas (no gasta tokens al repetir)"), value=True)
+        modo = st.radio(_("Modo de extracción"), ["secciones", "completo"], format_func=_,
+                        help=_("Secciones: una llamada por parte (entra en los planes gratuitos). Completo: una sola respuesta."))
+        st.divider()
+        st.caption(_("Cargar una especificación existente"))
+        subida = st.file_uploader(_("spec.json"), type=["json"], key="spec_json")
+        if subida is not None and st.button(_("Usar esta especificación")):
+            d = json.loads(subida.read())
+            ss.spec = Especificacion.model_validate(d.get("spec", d))
+    else:
+        max_it, usar_cache, modo = 4, True, "secciones"
 
 st.title(_("Conciliación de archivos regulatorios"))
 st.caption(_("Subí tus archivos (CSV, Excel, TXT posicional o XML) y el sistema los cruza. Si un formato es nuevo, "

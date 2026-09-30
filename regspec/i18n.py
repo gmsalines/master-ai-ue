@@ -22,6 +22,7 @@ PT: dict[str, str] = {
     "(otro)": "(outro)",
     "Nombre del modelo": "Nome do modelo",
     "API key": "Chave de API",
+    "(usa la clave configurada)": "(usa a chave configurada)",
     "Cada modelo tiene su propio cupo diario en el plan gratuito.": "Cada modelo tem sua própria cota diária no plano gratuito.",
     "No se guarda; solo se usa en esta sesión.": "Não é salva; só é usada nesta sessão.",
     "Máximo de iteraciones de autocorrección": "Máximo de iterações de autocorreção",

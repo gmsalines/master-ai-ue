@@ -17,6 +17,27 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+
+def _refrescar_regspec() -> None:
+    """Al publicar una versión nueva, Streamlit recarga app.py pero puede conservar en memoria los módulos
+    viejos del paquete: si cambió algún archivo de regspec/, se descartan para que se importen de nuevo."""
+    import sys
+    carpeta = Path(__file__).parent / "regspec"
+    firma = tuple(sorted((str(p), p.stat().st_mtime_ns) for p in carpeta.rglob("*.py")))
+    previa = sys.modules.get("_regspec_firma")
+    if previa is not None and getattr(previa, "firma", None) != firma:
+        for nombre in [m for m in sys.modules if m == "regspec" or m.startswith("regspec.")]:
+            del sys.modules[nombre]
+        st.cache_resource.clear()
+        st.cache_data.clear()
+    import types
+    marca = types.ModuleType("_regspec_firma")
+    marca.firma = firma
+    sys.modules["_regspec_firma"] = marca
+
+
+_refrescar_regspec()
+
 from regspec.archivos import escribir, generar_xsd
 from regspec.base_sin_ia import extraer_base
 from regspec.dsl import Especificacion

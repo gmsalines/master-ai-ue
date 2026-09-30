@@ -25,11 +25,13 @@ def _refrescar_regspec() -> None:
     carpeta = Path(__file__).parent / "regspec"
     firma = tuple(sorted((str(p), p.stat().st_mtime_ns) for p in carpeta.rglob("*.py")))
     previa = sys.modules.get("_regspec_firma")
-    if previa is not None and getattr(previa, "firma", None) != firma:
-        for nombre in [m for m in sys.modules if m == "regspec" or m.startswith("regspec.")]:
+    if getattr(previa, "firma", None) != firma:  # sin marca = primera vez con esta guarda: también se descarta
+        viejos = [m for m in sys.modules if m == "regspec" or m.startswith("regspec.")]
+        for nombre in viejos:
             del sys.modules[nombre]
-        st.cache_resource.clear()
-        st.cache_data.clear()
+        if viejos:
+            st.cache_resource.clear()
+            st.cache_data.clear()
     import types
     marca = types.ModuleType("_regspec_firma")
     marca.firma = firma

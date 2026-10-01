@@ -623,10 +623,26 @@ with tc:
                                 ArchivoGrupo, Filtro, Grupo, cruzar_grupos, transformar)
 
     from regspec.grupos import sugerir_llaves
+    from regspec.llave_ml import ejemplos_de_cruce, modelo_usuario, sugerir_llaves_modelo
+
+    def modelo_llave():
+        """Modelo de llave del usuario: el base, reentrenado con los cruces que confirmó (aprendizaje por uso)."""
+        if "modelo_llave" not in ss:
+            try:
+                ss.modelo_llave = modelo_usuario(almacen.uso_llave())
+            except Exception:  # noqa: BLE001
+                ss.modelo_llave = None
+        return ss.modelo_llave
 
     @st.cache_resource(show_spinner="Buscando la llave que vincula los archivos…", max_entries=8)
-    def llaves_sugeridas(firma: tuple, _tablas: list):
-        """Sugerencia conjunta de llaves (sin IA): la columna del primer archivo que mejor vincula a todos."""
+    def llaves_sugeridas(firma: tuple, usuario: str, version_modelo: int, _tablas: list, _modelo):
+        """Sugerencia conjunta de llaves (sin IA): el modelo aprendido elige el par de columnas; si no hay modelo,
+        la heurística (la columna del primer archivo que mejor vincula a todos)."""
+        if _modelo is not None:
+            try:
+                return sugerir_llaves_modelo(_tablas, _modelo)
+            except Exception:  # noqa: BLE001
+                pass
         return sugerir_llaves(_tablas)
 
     def tabla_silenciosa(f):
@@ -657,7 +673,9 @@ with tc:
     sugeridas = {}
     if leidas:
         firma = tuple((gi, f.name, f.size) for gi, f, _ in leidas)
-        lista_sug = llaves_sugeridas(firma, [d for _, _, d in leidas])
+        m_llave = modelo_llave()
+        lista_sug = llaves_sugeridas(firma, usuario_actual(), m_llave.n_usuario if m_llave is not None else -1,
+                                     [d for _, _, d in leidas], m_llave)
         for (gi, f, _tabla), s in zip(leidas, lista_sug):
             if s is not None:
                 sugeridas[(gi, f.name)] = ([s[0]], s[1], s[2])
@@ -806,6 +824,8 @@ with tc:
                     c1, c2 = st.columns([2, 1])
                     llave = c1.multiselect(_("Llave (una o varias columnas)"), cols, default=sug, placeholder=_("Elegí una o varias columnas"), key=f"llave_{gi}_{fi}_{V}_{k_sug}",
                                            help=_("Sugerida por la IA y validada con código.") if s and len(s) > 3 else
+                                           _("Sugerida por el modelo de llave, que aprende de los cruces que confirmás.")
+                                           if modelo_llave() is not None else
                                            _("Sugerida por código: la columna cuyos valores coinciden con los de los otros archivos."))
                     tr = c2.selectbox(_("Normalizar la llave"), list(TRANSFORMACIONES), format_func=lambda k: _(TRANSFORMACIONES[k]),
                                       index=list(TRANSFORMACIONES).index(tr_def), key=f"tr_{gi}_{fi}_{V}_{k_sug}_{tr_def}")
@@ -946,6 +966,17 @@ with tc:
                             ss.origen = "ia"
                     mem = almacen.recordar(firma_real, ss.cfg_actual, corregida, " vs ".join(n for n, *_ in listos))
                     ss.recordados.add(clave_mem)
+                    # aprendizaje por uso del modelo de llave: las llaves confirmadas son ejemplos etiquetados
+                    try:
+                        arch_u = [a for _n, arch, _m, _c in listos for a in arch]
+                        ej = ejemplos_de_cruce([a.df for a in arch_u],
+                                               [a.llave[0] if len(a.llave) == 1 else None for a in arch_u],
+                                               arch_u[0].transformacion)
+                        if ej["X"]:
+                            almacen.registrar_uso_llave(ej)
+                            ss.pop("modelo_llave", None)  # se reentrena en la próxima sugerencia
+                    except Exception as e:  # noqa: BLE001
+                        st.caption(f"{_('No se pudo actualizar el modelo de llave')}: {e}")
                     ss.memoria_id = mem.id if (mem is not None and almacen.remoto) else None
                     ss.aceptada = (not corregida) if de_memoria else (ia_ok if ia_res is not None else None)
                     ss.get("mem_cache", {}).pop(firma_real, None)

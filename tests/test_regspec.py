@@ -798,3 +798,50 @@ def test_configuracion_desde_texto_invierte_doble_negacion_y_ancla_tolerancia():
     r = configurar_desde_texto("sacá los anulados, tolerancia 1", _archivos_texto(), _ProveedorFijo(json.dumps(resp)))
     f = r["config"].grupos[1].archivos[0].filtros[0]
     assert (f.operador, f.accion) == ("==", "excluir") and r["config"].tolerancia == "1" and r["corregidas"] == 2
+
+
+# ------------------------------------------------------------------ modelo de llave aprendido (E7)
+
+
+def _caso_con_senuelo(dificultad="estandar"):
+    import random
+    from regspec.evaluacion.conciliacion import generar_caso
+    from regspec.evaluacion.llave_ml import con_senuelo
+    return con_senuelo(generar_caso("cobros", "es", dificultad, 4242), random.Random(1))
+
+
+def test_numeracion_de_filas_engana_a_la_heuristica_pero_no_al_modelo():
+    from regspec.grupos import sugerir_llaves
+    from regspec.llave_ml import modelo_base, sugerir_llaves_modelo
+    c = _caso_con_senuelo()
+    h = sugerir_llaves([c.a, c.b])
+    assert h[0][0] == "Nro_Linea" and h[1][2] >= 0.5  # la heurística toma la numeración de filas y la da por clara
+    m = sugerir_llaves_modelo([c.a, c.b], modelo_base())
+    assert (m[0][0], m[1][0]) == (c.llave_a, c.llave_b)
+    assert m[1][2] >= 0.5  # la solidez de la llave elegida se sigue informando (validación y respaldo con IA)
+
+
+def test_aprendizaje_por_uso_registra_ejemplos_y_reentrena(tmp_path):
+    from regspec.almacen import AlmacenLocal
+    from regspec.llave_ml import ejemplos_de_cruce, modelo_usuario, sugerir_llaves_modelo
+    c = _caso_con_senuelo("dificil")
+    ej = ejemplos_de_cruce([c.a, c.b], [c.llave_a, c.llave_b], c.transformacion)
+    assert sum(ej["y"]) >= 1 and len(ej["X"]) == len(ej["y"]) > sum(ej["y"])
+    al = AlmacenLocal(tmp_path)
+    assert al.uso_llave() == [] and modelo_usuario([]).n_usuario == 0
+    al.registrar_uso_llave(ej)
+    al.registrar_uso_llave({"X": [], "y": []})  # vacío: no se guarda
+    assert len(al.uso_llave()) == 1
+    m = modelo_usuario(al.uso_llave())
+    assert m.n_usuario == len(ej["y"])
+    s = sugerir_llaves_modelo([c.a, c.b], m)
+    assert (s[0][0], s[1][0]) == (c.llave_a, c.llave_b)
+
+
+def test_modelo_de_llave_con_tablas_grandes_usa_la_heuristica(monkeypatch):
+    from regspec import llave_ml
+    from regspec.grupos import sugerir_llaves
+    c = _caso_con_senuelo()
+    monkeypatch.setattr(llave_ml, "MAX_FILAS_MODELO", 10)
+    assert llave_ml.sugerir_llaves_modelo([c.a, c.b], llave_ml.modelo_base()) == sugerir_llaves([c.a, c.b])
+    assert llave_ml.ejemplos_de_cruce([c.a, c.b], [c.llave_a, c.llave_b], "exacta") == {"X": [], "y": []}

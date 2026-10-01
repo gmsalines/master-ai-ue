@@ -169,6 +169,13 @@ class Almacen:
     def formatos(self) -> dict[str, dict]:
         return {}
 
+    # aprendizaje por uso de la llave: ejemplos etiquetados de cada cruce confirmado (ver regspec.llave_ml)
+    def uso_llave(self) -> list[dict]:
+        return []
+
+    def registrar_uso_llave(self, ejemplo: dict) -> None:
+        return None
+
     def guardar_formato(self, nombre: str, spec: dict, origen: str = "ia", tokens: int = 0, iteraciones: int = 0) -> None:
         return None
 
@@ -237,6 +244,21 @@ class AlmacenLocal(Almacen):
 
     def _usuario(self):
         return getattr(self, "usuario", "local")
+
+    def uso_llave(self):
+        p = self.carpeta / "uso_llave.json"
+        try:
+            return json.loads(p.read_text(encoding="utf-8")) if p.exists() else []
+        except Exception:  # noqa: BLE001
+            return []
+
+    def registrar_uso_llave(self, ejemplo):
+        from .llave_ml import MAX_CRUCES_USUARIO
+        if not ejemplo.get("X"):
+            return
+        todos = (self.uso_llave() + [ejemplo])[-MAX_CRUCES_USUARIO:]
+        self.carpeta.mkdir(parents=True, exist_ok=True)
+        (self.carpeta / "uso_llave.json").write_text(json.dumps(todos), encoding="utf-8")
 
     def acepta_auto(self, mem):
         return self._usuario() in (mem.auto_usuarios or [])
@@ -434,7 +456,23 @@ class AlmacenSupabase(Almacen):
     # formatos aprendidos
     def formatos(self):
         filas = self.c.table("especificacion").select("nombre,spec").eq("workspace_id", self.ws).execute().data
-        return {f["nombre"]: f["spec"] for f in filas}
+        return {f["nombre"]: f["spec"] for f in filas if not str(f["nombre"]).startswith("__")}
+
+    # ejemplos de uso de la llave: una fila reservada de «especificacion» por usuario (no requiere migración)
+    def _nombre_uso(self):
+        return f"__uso_llave__{self.uid}"
+
+    def uso_llave(self):
+        filas = (self.c.table("especificacion").select("spec").eq("workspace_id", self.ws)
+                 .eq("nombre", self._nombre_uso()).execute().data)
+        return (filas[0]["spec"] or {}).get("ejemplos", []) if filas else []
+
+    def registrar_uso_llave(self, ejemplo):
+        from .llave_ml import MAX_CRUCES_USUARIO
+        if not ejemplo.get("X"):
+            return
+        todos = (self.uso_llave() + [ejemplo])[-MAX_CRUCES_USUARIO:]
+        self.guardar_formato(self._nombre_uso(), {"ejemplos": todos}, origen="manual")
 
     def guardar_formato(self, nombre, spec, origen="ia", tokens=0, iteraciones=0):
         self.c.table("especificacion").upsert(

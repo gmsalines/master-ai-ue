@@ -11,6 +11,8 @@ import re
 IDIOMAS = {"es": "Español", "pt": "Português"}
 
 PT: dict[str, str] = {
+    "Sugerida por el modelo de llave, que aprende de los cruces que confirmás.": "Sugerida pelo modelo de chave, que aprende com os cruzamentos que você confirma.",
+    "No se pudo actualizar el modelo de llave": "Não foi possível atualizar o modelo de chave",
     # encabezado y barra lateral
     "Conciliación de archivos regulatorios": "Conciliação de arquivos regulatórios",
     "Subí tus archivos (CSV, Excel, TXT posicional o XML) y el sistema los cruza. Si un formato es nuevo, lo aprende de su manual técnico: un LLM lo convierte en una especificación formal y un verificador la comprueba.":

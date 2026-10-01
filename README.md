@@ -7,7 +7,7 @@ El sistema tiene dos flujos:
 | Flujo | Qué hace | ¿Usa IA? |
 |---|---|---|
 | **1 · Del manual a la especificación** | Lee el manual técnico (MD/TXT/PDF) y produce una especificación formal verificada del archivo regulatorio. | Sí, lo mínimo: primero intenta con código. Se hace una vez por manual. |
-| **2 · Conciliación por grupos** | Se arman **grupos de archivos** (CSV/Excel, o TXT/XML regulatorios leídos con la especificación del flujo 1). En cada archivo se define su **llave** (una o varias columnas) y cómo normalizarla (exacta, solo números, sin ceros a la izquierda, normalizada), más filtros de exclusión. Los archivos de un grupo se combinan concatenando, como base + referencia (lookup por llave) o sumando por llave. El cruce es N-way sobre la llave: presencia en cada grupo, diferencias de importe con tolerancia, duplicados, cobertura; exporta a Excel. | Opcional. La llave se sugiere por código y la IA solo entra como respaldo, con validación sobre los datos. La configuración también puede describirse en texto. |
+| **2 · Conciliación por grupos** | Se arman **grupos de archivos** (CSV/Excel, o TXT/XML regulatorios leídos con la especificación del flujo 1). En cada archivo se define su **llave** (una o varias columnas) y cómo normalizarla (exacta, solo números, sin ceros a la izquierda, normalizada), más filtros de exclusión. Los archivos de un grupo se combinan concatenando, como base + referencia (lookup por llave) o sumando por llave. El cruce es N-way sobre la llave: presencia en cada grupo, diferencias de importe con tolerancia, duplicados, cobertura; exporta a Excel. | Sí, con poco costo. La llave la sugiere un **modelo aprendido** (regresión logística, sin LLM) que se reentrena con los cruces que confirma cada usuario; el LLM solo entra como respaldo, con validación sobre los datos. La configuración también puede describirse en texto. |
 
 Además, con la especificación el sistema **valida** archivos antes del envío y **genera** el archivo a partir de un CSV, calculando solo los totales de control.
 
@@ -41,6 +41,7 @@ Secuencia del compilador: parser sin IA → LLM por secciones → verificador de
 | **Bucle de autocorrección** | El modelo recibe errores concretos (qué, dónde, cómo corregir) y los corrige. La mejora se mide por iteración. |
 | **Anclaje por evidencia** | Cada campo y cada regla deben citar un fragmento literal del manual; si no existe, se trata como alucinación. |
 | **Evaluación por comportamiento** | Mide si la especificación extraída *se comporta* como la de referencia sobre una batería de archivos con errores inyectados, con independencia de cómo nombre los campos. |
+| **Modelo de llave con aprendizaje por uso** | Una regresión logística elige la llave a partir de características del par de columnas y se reentrena con las llaves que confirma cada usuario: aprende patrones que generalizan a archivos con otra estructura. |
 | **LLM + validación determinista en la conciliación** | La IA propone la llave o la configuración a partir de nombres, ejemplos o una descripción en texto; el código comprueba contra los datos que lo propuesto exista y funcione antes de aplicarlo. |
 
 ## Estructura
@@ -59,18 +60,20 @@ regspec/
   cruce.py          lectura de archivos, detección de formato, cruce de 2 tablas, sugerencia de llave (código y LLM)
   grupos.py         conciliación N-way por grupos de archivos con llaves (flujo 2)
   instrucciones.py  texto -> configuración del cruce, con validación determinista
+  llave_ml.py       modelo de llave aprendido (regresión logística) y reentrenamiento con el uso
+  modelos/          modelo base de la llave (coeficientes JSON) y sus datos de entrenamiento (.npz)
   almacen.py        cruces guardados, memoria de configuración y formatos (local o Supabase)
   metricas.py       métricas de uso de la memoria de configuración (eventos, confianza, exportación a Excel)
   i18n.py           textos de la interfaz en español y portugués
   llm/              proveedores desacoplados, prompts, extractor con bucle
-  evaluacion/       mutaciones, métricas, banco del compilador (ejecutar.py), banco de conciliación (conciliacion.py), informe.py
+  evaluacion/       mutaciones, métricas, banco del compilador (ejecutar.py), banco de conciliación (conciliacion.py), modelo de llave (llave_ml.py), informe.py
 manuales/           5 manuales ficticios de dificultad creciente
 gold/               especificaciones de referencia escritas a mano (corpus de evaluación)
 biblioteca/         formatos reales cargados a mano (sin datos): se reconocen solos al subir un archivo
 ejemplos/           CSV para generar un informe; par sistema.csv / presentado.txt; ejemplos/grupos/ para la conciliación por grupos
 resultados/         salidas de las evaluaciones (detalle.csv y resumen.md por corrida)
 docs/               notas y migraciones SQL
-tests/              73 tests
+tests/              76 tests
 app.py              app en Streamlit
 ```
 
@@ -79,7 +82,7 @@ app.py              app en Streamlit
 ```bash
 python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-python -m pytest                                      # 73 tests
+python -m pytest                                      # 76 tests
 ```
 
 La clave del proveedor va en un archivo `.env` en la raíz, que no se versiona. En Streamlit Cloud va en *Secrets* (ver más abajo).
@@ -166,6 +169,9 @@ python -m regspec evaluar --proveedor groq --manuales m1_retenciones,m2_cuentas 
 python -m regspec.evaluacion.conciliacion -o resultados/eval_conciliacion
 python -m regspec.evaluacion.conciliacion -o resultados/eval_texto_nuevos --solo-texto --semilla-texto 3000 --llm groq --modelo openai/gpt-oss-20b
 
+# Modelo de llave aprendido (E7, sin LLM, unos 3 minutos; también regenera regspec/modelos/)
+python -m regspec.evaluacion.llave_ml -o resultados/eval_llave_ml
+
 # Tablas para la memoria
 python -m regspec.evaluacion.informe
 ```
@@ -207,6 +213,7 @@ python -m regspec.evaluacion.informe
 | E4 | Memoria de configuración | `eval_conciliacion` |
 | E5 | Rendimiento | `eval_conciliacion` |
 | E6 | Texto → configuración | `eval_texto` (semilla 2000, diseño) y `eval_texto_nuevos` (semilla 3000) |
+| E7 | Modelo de llave aprendido y aprendizaje por uso | `eval_llave_ml` |
 
 `20260927_194002` y `20260930_e1_parcial` son corridas exploratorias o interrumpidas por cupo; no se usan en la memoria.
 
@@ -281,6 +288,33 @@ El modelo no inventa columnas, pero sí elige columnas equivocadas. La validaci�
 - Las instrucciones explícitas quedan al 100 % validadas en ambos conjuntos. Las semánticas, que describen lo que se quiere sin nombrar las columnas, quedan en 83,3 % y 75,0 %.
 - Columnas inventadas: 1 y 2 respectivamente; la validación las detecta.
 
+### E7 · Modelo de llave aprendido y aprendizaje por uso
+
+Sin LLM ni tokens. Caso difícil: los archivos traen una **numeración de filas** (1, 2, 3…), una columna única que coincide al 100 % entre archivos. Es habitual en exportaciones y engaña a una regla de contención × unicidad.
+
+**E7a · Generalización** (validación cruzada dejando un escenario fuera; prueba: los 24 casos de E3):
+
+| archivos | heurística | modelo entrenado sin señuelos | modelo entrenado con señuelos |
+|---|---|---|---|
+| sin numeración de filas | 100 % | 100 % | 100 % |
+| con numeración de filas | **0 %** | 25 % | **100 %** |
+
+La heurística no solo falla: presenta la llave equivocada como **clara** (solidez 1,0), así que tampoco ofrece el respaldo con IA.
+
+**E7b · Aprendizaje por uso** (5 usuarios simulados × 20 ejecuciones; todos los archivos con numeración de filas y estructura variable; el modelo base se entrenó **sin** señuelos):
+
+| condición | acierto | correcciones del usuario (de 20) |
+|---|---|---|
+| heurística | 0 % | 20,0 |
+| heurística + memoria de configuración | 59 % | 8,2 |
+| modelo base, sin uso | 47 % | 10,6 |
+| **modelo + aprendizaje por uso** | **96 %** | **0,8** |
+
+- Basta **una corrección** para que el modelo aprenda el patrón: el peso de «parece numeración de filas» pasa de 0,00 a −3,42.
+- La memoria de configuración solo ayuda cuando se repite exactamente la misma estructura; el modelo generaliza a estructuras nuevas.
+- **No regresión:** tras el uso, el modelo de cada usuario sigue acertando los 24 casos de E3 (100 %).
+- Costo: unos 110 ms por sugerencia y unos 6 ms por reentrenamiento.
+
 ## Decisiones y supuestos del DSL
 
 - Posiciones 1-based e inclusivas. En los decimales, `longitud` incluye los dígitos decimales.
@@ -298,6 +332,19 @@ El modelo no inventa columnas, pero sí elige columnas equivocadas. La validaci�
 - Excel: se elige la hoja con más datos y se detecta la fila de encabezado (reportes con títulos arriba).
 - TXT delimitado de un solo tipo de registro: se lee con pandas; un padrón de ~4,9 millones de líneas (370 MB) se lee en ~8 s y el cruce completo (lookup contra el padrón + 3 grupos) tarda ~5 s. La validación campo a campo se hace en «Validar archivo».
 - La app acepta archivos de hasta 1 GB (`.streamlit/config.toml`).
+
+## Modelo de llave aprendido y aprendizaje por uso
+
+`regspec/llave_ml.py` reemplaza la fórmula fija por un **modelo de regresión logística** (scikit-learn):
+
+- **Candidatos:** cada par (columna del archivo ancla, columna de otro archivo, normalización exacta o solo números) con perfiles de dígitos compatibles.
+- **Características** (32), sin depender del dominio: contención en ambos sentidos, unicidad, solidez de la heurística, si la columna parece llave o identificador, parecido de nombres, perfil de dígitos, si los valores parecen una numeración de filas, y las sílabas iniciales de cada palabra del nombre (hash en 16 dimensiones).
+- **Modelo base:** entrenado con casos sintéticos de los cuatro escenarios, con y sin numeración de filas (`regspec/modelos/llave_base.json`, más los datos con que se entrenó en `llave_base_datos.npz` para poder reentrenar).
+- **Aprendizaje por uso:** al confirmar un cruce, las llaves elegidas (aceptando o corrigiendo la sugerencia) se guardan como ejemplos etiquetados: el par elegido es positivo y el resto, negativo. Se guardan solo características numéricas, nunca valores de los archivos. El modelo del usuario se reentrena con los ejemplos base más los suyos, con peso 5. En local van a `cruces_guardados/uso_llave.json`; con usuarios, a una fila reservada de la tabla `especificacion` (sin migración). Se conservan los últimos 200 cruces.
+- **Validación:** el modelo elige el par, pero la solidez que se informa es la de la heurística (contención × factor de unicidad). Por debajo de 0,5 la llave no se presenta como clara y se ofrece el respaldo con IA.
+- Con tablas de más de 300.000 filas (p. ej. un padrón) se usa la heurística, más liviana.
+
+A diferencia de la memoria de configuración, que es determinista y solo reconoce la misma estructura de archivos, este componente **sí es aprendizaje automático**: ajusta los pesos del modelo con la retroalimentación del usuario y lo aprendido se aplica a archivos con otra estructura.
 
 ## Describir el cruce con texto
 
@@ -339,11 +386,12 @@ Sin esas claves, todo funciona en modo local (sin login) y la memoria se guarda 
 - E1 con `gpt-oss-20b` en m1 y m2, para tener los dos modelos en los cinco manuales; idealmente una segunda repetición con `--sin-cache`.
 - Ablaciones del compilador (`llm_bucle_sin_evidencia`, `llm_bucle_sin_ejecucion`) con los cinco manuales.
 - Caso real anonimizado para medir el tiempo frente al proceso manual.
-- Probar a mano en la app el botón de llave con IA y «Describir el cruce con texto».
+- Probar a mano en la app el botón de llave con IA, «Describir el cruce con texto» y la sugerencia del modelo de llave con archivos que traigan numeración de filas.
 
 ## Limitaciones y líneas futuras
 
 - Resultados del compilador con n = 1 y modelos mezclados.
+- E7 usa un solo tipo de trampa (numeración de filas) y usuarios simulados que siempre corrigen bien; falta probar el modelo de llave con patrones variados y con usuarios reales.
 - Cuando el bucle no progresa, reintentar con otra temperatura u otro modelo.
 - Textos extraídos de PDF con maquetación compleja (m4).
 - Instrucciones en texto que describen el filtro por su significado y no por la columna.

@@ -206,38 +206,41 @@ python -m regspec.evaluacion.informe
 
 | Exp. | Qué mide | Carpeta |
 |---|---|---|
-| E1 | Compilador de manuales | `20260930_linea_base_e1`, `20260930_e1_gptoss120b` (m1–m2), `20260930_e1_gptoss120b_m3m5`, `20260930_e1_gptoss20b` (m3–m5) |
+| E1 | Compilador de manuales | `20260930_linea_base_e1`; gpt-oss-20b: `20261001_e1_gptoss20b_m1m2` y `20260930_e1_gptoss20b` (m3–m5); gpt-oss-120b: `20260930_e1_gptoss120b` (m1–m2) y `20260930_e1_gptoss120b_m3m5`; tabla en `e1_consolidado.md` |
 | E2 | Motor de conciliación y ablación | `eval_conciliacion` (semilla 1000); línea base v1 en `eval_conciliacion_v1_linea_base` |
 | E3 | Sugerencia de llave por código | `eval_conciliacion` |
 | E3b | Sugerencia de llave con LLM | `eval_conciliacion_llm` |
 | E4 | Memoria de configuración | `eval_conciliacion` |
 | E5 | Rendimiento | `eval_conciliacion` |
-| E6 | Texto → configuración | `eval_texto` (semilla 2000, diseño) y `eval_texto_nuevos` (semilla 3000) |
+| E6 | Texto → configuración | `eval_texto` (semilla 2000, diseño), `eval_texto_nuevos` y `eval_texto_nuevos_rep2` (semilla 3000); tabla en `e6_consolidado.md` |
 | E7 | Modelo de llave aprendido y aprendizaje por uso | `eval_llave_ml` |
 
 `20260927_194002` y `20260930_e1_parcial` son corridas exploratorias o interrumpidas por cupo; no se usan en la memoria.
 
 ## Resultados
 
-### E1 · Compilador de manuales (n = 1)
+### E1 · Compilador de manuales (n = 1 por modelo)
 
-Exactitud balanceada por manual (✓ = especificación válida según el verificador, ✗ = no válida):
+Exactitud balanceada por manual (✓ = especificación válida según el verificador, ✗ = no válida; entre paréntesis, iteraciones del bucle):
 
-| manual | parser sin IA | LLM, 1 intento | LLM + verificador + autocorrección | modelo |
-|---|---|---|---|---|
-| m1 | 0,92 ✓ | 0,98 ✓ | 0,98 ✓ (1 iter.) | gpt-oss-120b |
-| m2 | 0,10 ✓ | 0,98 ✗ | 0,98 ✓ (2 iter.) | gpt-oss-120b |
-| m3 | 0,00 ✗ | 0,00 ✗ | 0,93 ✓ (2 iter.) | gpt-oss-20b |
-| m4 | 0,00 ✗ | 0,00 ✗ | 0,00 ✗ (3 iter., sin progreso) | gpt-oss-20b |
-| m5 | 0,89 ✗ | 1,00 ✗ | 1,00 ✓ (2 iter.) | gpt-oss-20b |
-| **especificaciones válidas** | 2 de 5 | 1 de 5 | 4 de 5 | |
-| **media** | 0,38 | 0,59 | 0,78 | |
+| manual | parser sin IA | gpt-oss-20b · 1 intento | gpt-oss-20b · sistema completo | gpt-oss-120b · 1 intento | gpt-oss-120b · sistema completo |
+|---|---|---|---|---|---|
+| m1 | 0,92 ✓ | 1,00 ✓ | 1,00 ✓ (1) | 0,98 ✓ | 0,98 ✓ (1) |
+| m2 | 0,10 ✓ | 0,87 ✗ | 0,88 ✓ (2) | 0,98 ✗ | 0,98 ✓ (2) |
+| m3 | 0,00 ✗ | 0,00 ✗ | 0,93 ✓ (2) | 0,00 ✗ | 0,00 ✗ (2) |
+| m4 | 0,00 ✗ | 0,00 ✗ | 0,00 ✗ (3) | 0,00 ✗ | 0,00 ✗ (4) |
+| m5 | 0,89 ✗ | 1,00 ✗ | 1,00 ✓ (2) | 1,00 ✗ | 1,00 ✗ (2) |
+| **especificaciones válidas** | 2 de 5 | 1 de 5 | **4 de 5** | 1 de 5 | 2 de 5 |
+| **media** | 0,38 | 0,57 | **0,76** | 0,59 | 0,59 |
+| **tokens medios** | – | 7.277 | 12.547 | 7.299 | 13.072 |
 
-- E1 **mezcla modelos** por el cupo: m1–m2 con `gpt-oss-120b` y m3–m5 con `gpt-oss-20b`. Con `gpt-oss-120b`, el bucle se estancó en m3, m4 y m5 («la corrección no produjo cambios») y ninguna especificación quedó válida.
-- En m2 el sistema completo extrajo 10 de 12 reglas.
-- m4 (texto de PDF) falló en ambos modelos, pero el sistema **no entregó una especificación incorrecta como válida**: avisó del fallo.
+- Con **un solo modelo** (gpt-oss-20b) en los cinco manuales, el sistema completo obtiene 4 especificaciones válidas de 5, frente a 1 de 5 con un solo intento y 2 de 5 con el parser sin IA.
+- Con gpt-oss-120b el bucle se estancó en m3, m4 y m5 («la corrección no produjo cambios»): el modelo más grande corrige peor sus propios errores en estos manuales.
+- m4 (texto de PDF) falló con ambos modelos, pero el sistema **no entregó una especificación incorrecta como válida**: avisó del fallo.
 - En m5 el intento único se comporta bien (1,00) pero arrastra la errata del manual; el verificador la bloquea y el bucle la corrige.
+- En m2 el sistema completo extrajo 10 (120b) y 11 (20b) de 12 reglas y el verificador la dio por válida: controla lo extraído, no detecta reglas que faltan. Con 20b, además, la especificidad es 0,8.
 - **Hallazgo:** el verificador bloquea siempre las especificaciones defectuosas, pero que la autocorrección funcione depende del modelo.
+- Tabla generada desde los `detalle.csv` en `resultados/e1_consolidado.md`; se descartan las filas que fallaron por cupo.
 
 ### E2 · Motor de conciliación
 
@@ -279,14 +282,17 @@ El modelo no inventa columnas, pero sí elige columnas equivocadas. La validaci�
 
 ### E6 · Texto → configuración
 
-| conjunto | instrucciones | config. completa sin validar | con validación | exactitud del cruce | tokens |
-|---|---|---|---|---|---|
-| semilla 2000 (diseño) | 24 | 50,0 % | 91,7 % | 99,8 % | 1.024 |
-| semilla 3000 (nuevas) | 23 (1 excluida por cupo) | 65,2 % | 87,0 % | 95,6 % | 990 |
+| conjunto | instrucciones | config. completa sin validar | con validación | explícitas validadas | semánticas validadas | exactitud del cruce |
+|---|---|---|---|---|---|---|
+| semilla 2000 (diseño) | 24 | 50,0 % | 91,7 % | 100,0 % | 83,3 % | 99,8 % |
+| semilla 3000, repetición 1 | 23 | 65,2 % | 87,0 % | 100,0 % | 75,0 % | 95,6 % |
+| semilla 3000, repetición 2 | 24 | 45,8 % | 75,0 % | 91,7 % | 58,3 % | 95,4 % |
+| **semilla 3000, ambas** | **47** | **55,3 %** | **80,9 %** | **95,7 %** | **66,7 %** | **95,5 %** |
 
-- Las reglas de validación se diseñaron sobre la semilla 2000; la 3000 confirma que generalizan.
-- Las instrucciones explícitas quedan al 100 % validadas en ambos conjuntos. Las semánticas, que describen lo que se quiere sin nombrar las columnas, quedan en 83,3 % y 75,0 %.
-- Columnas inventadas: 1 y 2 respectivamente; la validación las detecta.
+- Las reglas de validación se diseñaron sobre la semilla 2000; la 3000 (instrucciones nuevas) se corrió dos veces con gpt-oss-20b. En la repetición 1 se excluyó una instrucción por cupo.
+- La validación mejora la configuración completa en todas las corridas (de 55 % a 81 % en las instrucciones nuevas). La diferencia entre repeticiones refleja la variabilidad del modelo.
+- Las instrucciones explícitas quedan casi siempre bien (95,7 %); las semánticas, que describen lo que se quiere sin nombrar las columnas, son el punto débil (66,7 %).
+- Tabla en `resultados/e6_consolidado.md`.
 
 ### E7 · Modelo de llave aprendido y aprendizaje por uso
 
@@ -382,15 +388,14 @@ Sin esas claves, todo funciona en modo local (sin login) y la memoria se guarda 
 
 ## Pendientes
 
-- E6 semilla 3000: completar la instrucción que falló por cupo (la caché reutiliza las otras 23).
-- E1 con `gpt-oss-20b` en m1 y m2, para tener los dos modelos en los cinco manuales; idealmente una segunda repetición con `--sin-cache`.
+- Opcional: segunda repetición de E1 con `--sin-cache`.
 - Ablaciones del compilador (`llm_bucle_sin_evidencia`, `llm_bucle_sin_ejecucion`) con los cinco manuales.
 - Caso real anonimizado para medir el tiempo frente al proceso manual.
 - Probar a mano en la app el botón de llave con IA, «Describir el cruce con texto» y la sugerencia del modelo de llave con archivos que traigan numeración de filas.
 
 ## Limitaciones y líneas futuras
 
-- Resultados del compilador con n = 1 y modelos mezclados.
+- Resultados del compilador con una repetición por modelo (n = 1).
 - E7 usa un solo tipo de trampa (numeración de filas) y usuarios simulados que siempre corrigen bien; falta probar el modelo de llave con patrones variados y con usuarios reales.
 - Cuando el bucle no progresa, reintentar con otra temperatura u otro modelo.
 - Textos extraídos de PDF con maquetación compleja (m4).

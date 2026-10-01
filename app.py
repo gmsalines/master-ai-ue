@@ -532,7 +532,28 @@ with tc:
     if cfg is not None:
         st.info(_('Usando la configuración **{0}**. Subí los archivos del período en el mismo orden (grupo y posición dentro del grupo) y revisá las llaves antes de cruzar.').format(ss.cfg_nombre))
 
-    st.subheader(_("1 · Armá los grupos de archivos"))
+    ss.setdefault("carga_n", 0)  # sufijo de los cargadores de archivos: cambiarlo los vacía
+
+    def limpiar_conciliacion() -> None:
+        """Deja la pantalla lista para otra conciliación: sin archivos, sin resultado y sin configuración aplicada."""
+        aplicar_config(None)
+        for k in ("res_grupos", "res_excel", "cfg_actual", "archivos_actual", "aceptada", "memoria_id", "memoria_cfg",
+                  "memoria_descartada", "auto_aplicada", "auto_firma", "memoria_confianza", "memoria_obj", "llaves_ia",
+                  "recordados", "mem_cache", "t_prep", "ia_llamadas", "ia_tokens", "ia_ult", "ver_estado"):
+            ss.pop(k, None)
+        for k in [k for k in ss.keys() if str(k).startswith(("nfil_", "hoja_g"))]:
+            del ss[k]
+        ss.n_grupos = 2
+        ss.carga_n += 1
+
+    c_tit, c_limp = st.columns([4, 1])
+    c_tit.subheader(_("1 · Armá los grupos de archivos"))
+    hay_algo = any(ss.get(f"gfiles_{gi}_{ss.carga_n}") for gi in range(ss.get("n_grupos", 2))) or ss.get("res_grupos") is not None
+    c_limp.write("")
+    if c_limp.button(_("🧹 Nueva conciliación"), use_container_width=True, disabled=not hay_algo, key="limpiar_arriba",
+                     help=_("Quita los archivos, el resultado y la configuración aplicada para empezar otra conciliación.")):
+        limpiar_conciliacion()
+        st.rerun()
 
     def leer_uno(f, lado: str, i: int, hoja_def: Optional[str] = None):
         if True:
@@ -625,7 +646,7 @@ with tc:
     grupos_ui = []
     hojas_sel: dict = {}
     # sugerencia conjunta de llaves con todos los archivos ya subidos (se recalcula solo si cambian los archivos)
-    subidos = [(gi, f) for gi in range(ss.n_grupos) for f in (ss.get(f"gfiles_{gi}") or [])]
+    subidos = [(gi, f) for gi in range(ss.n_grupos) for f in (ss.get(f"gfiles_{gi}_{ss.carga_n}") or [])]
     # tiempo de preparación (métrica): desde que se sube el primer archivo del conjunto hasta «Cruzar»
     if not subidos:
         ss.t_prep = None
@@ -747,7 +768,7 @@ with tc:
             gcfg = cfg.grupos[gi] if cfg is not None and gi < len(cfg.grupos) else None
             nombre_g = c_nom.text_input(_("Nombre del grupo"), gcfg.nombre if gcfg else _("Grupo {0}").format(gi + 1), key=f"gnom_{gi}_{V}_{ss.idioma}")
             archivos = st.file_uploader(_('Archivos de «{0}» (uno o varios)').format(nombre_g), type=["csv", "xlsx", "xls", "txt", "xml", "dat"],
-                                        accept_multiple_files=True, key=f"gfiles_{gi}")
+                                        accept_multiple_files=True, key=f"gfiles_{gi}_{ss.carga_n}")
             # por defecto: si los archivos del grupo tienen columnas distintas (p. ej. retenciones + padrón), base + referencia
             tablas_g = [d for g_, _f, d in leidas if g_ == gi]
             modo_def = "concatenar"
@@ -978,6 +999,10 @@ with tc:
                         ss.res_excel = excel = r.a_excel()
             if excel is not None:
                 st.download_button(_("Descargar resultado (Excel)"), excel, "conciliacion.xlsx")
+            if st.button(_("🧹 Nueva conciliación"), key="limpiar_abajo",
+                         help=_("Quita los archivos, el resultado y la configuración aplicada para empezar otra conciliación.")):
+                limpiar_conciliacion()
+                st.rerun()
             if ss.get("cfg_actual") is not None:
                 with st.expander(_("💾 Guardar este cruce"), expanded=False):
                     st.caption(_("Se guardan la configuración (para repetirla con los archivos del próximo período) y el resultado."))

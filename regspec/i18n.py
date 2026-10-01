@@ -300,6 +300,9 @@ PT: dict[str, str] = {
     "Configuración aprendida (ofrecida)": "Configuração aprendida (oferecida)",
     "Configuración aprendida (aplicada sola, > 95 %)": "Configuração aprendida (aplicada sozinha, > 95 %)",
     "Cruce guardado reutilizado": "Cruzamento salvo reutilizado",
+    "🧹 Nueva conciliación": "🧹 Nova conciliação",
+    "Quita los archivos, el resultado y la configuración aplicada para empezar otra conciliación.":
+        "Remove os arquivos, o resultado e a configuração aplicada para começar outra conciliação.",
 }
 
 # mensajes variables del núcleo (validación y resúmenes del cruce)

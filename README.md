@@ -1,6 +1,6 @@
 # Compilador neuro-simbólico de especificaciones regulatorias y conciliación de archivos
 
-*Estado al 1 de octubre de 2026. Rama `siguiente-paso` del repositorio `gmsalines/master-ai-ue`. App publicada en https://conciliacion-tfm.streamlit.app/.*
+*Estado al 1 de octubre de 2026. Rama `siguiente-paso` del repositorio `gmsalines/master-ai-ue` (al día con la carpeta de Gabi). App publicada en https://conciliacion-tfm.streamlit.app/.*
 
 El sistema tiene dos flujos:
 
@@ -71,7 +71,7 @@ manuales/           5 manuales ficticios de dificultad creciente
 gold/               especificaciones de referencia escritas a mano (corpus de evaluación)
 biblioteca/         formatos reales cargados a mano (sin datos): se reconocen solos al subir un archivo
 ejemplos/           CSV para generar un informe; par sistema.csv / presentado.txt; ejemplos/grupos/ para la conciliación por grupos
-resultados/         salidas de las evaluaciones (detalle.csv y resumen.md por corrida)
+resultados/         salidas de las evaluaciones (detalle.csv y resumen.md por corrida; no se versiona)
 docs/               notas y migraciones SQL
 tests/              76 tests
 app.py              app en Streamlit
@@ -366,6 +366,7 @@ En el expander «Describir el cruce con texto» el usuario escribe qué quiere c
 
 - Después de cruzar, «💾 Guardar este cruce» guarda la **configuración** (grupos, llaves, normalización, filtros, columnas traídas, importes y tolerancia) y el **resultado** (resumen + Excel). En modo local va a `cruces_guardados/` (fuera del repositorio); con usuarios, a Supabase.
 - El período siguiente se elige el cruce en «Partir de un cruce guardado» (o «Reutilizar configuración» en la pestaña «Mis cruces»): la configuración se aplica a los archivos nuevos por posición (grupo y orden dentro del grupo) y avisa si falta alguna columna.
+- «🧹 Nueva conciliación» vacía archivos, resultado y configuración aplicada para empezar otra.
 - El almacenamiento está detrás de la interfaz `Almacen`, con dos implementaciones: `AlmacenLocal` y `AlmacenSupabase`.
 - La interfaz está en **español y portugués** (selector 🌐 en la barra lateral; por defecto, el idioma del navegador). Los textos se escriben en español con `_()` y `regspec/i18n.py` tiene las traducciones, incluidos los mensajes de validación. Un test verifica que todo texto de la app tenga traducción.
 

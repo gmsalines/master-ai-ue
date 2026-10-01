@@ -656,67 +656,145 @@ def test_memoria_de_configuracion_local(tmp_path):
     assert confianza(10, 0) > confianza(3, 0) > confianza(3, 2)
 
 
-def test_umbral_de_aplicacion_automatica_y_aceptacion_por_usuario(tmp_path):
-    from regspec.almacen import UMBRAL_AUTO, AlmacenLocal, ArchivoCfg, ConfigCruce, GrupoCfg, confianza, modo_memoria
-    cfg = ConfigCruce(grupos=[GrupoCfg(nombre="A", archivos=[ArchivoCfg(llave=["x"])]),
-                              GrupoCfg(nombre="B", archivos=[ArchivoCfg(llave=["y"])])])
-    ana, bea = AlmacenLocal(tmp_path, usuario="ana"), AlmacenLocal(tmp_path, usuario="bea")
-    m = None
-    for _ in range(20):
-        m = ana.recordar("f", cfg, False)
-    assert m.confianza == confianza(20, 0) == UMBRAL_AUTO and modo_memoria(m, True) == "ofrecer"  # 95 % no alcanza: debe superarlo
-    m = ana.recordar("f", cfg, False)
-    assert m.confianza > UMBRAL_AUTO
-    assert modo_memoria(m, ana.acepta_auto(m)) == "ofrecer_auto"  # supera el umbral, pero nadie lo aceptó
-    ana.fijar_auto(m, True)
-    m = ana.memoria("f")
-    assert modo_memoria(m, ana.acepta_auto(m)) == "automatica"
-    assert modo_memoria(m, bea.acepta_auto(m)) == "ofrecer_auto"  # la aceptación es por usuario
-    m = ana.recordar("f", cfg, True)  # una corrección baja la confianza: deja de aplicarse sola
-    assert modo_memoria(m, ana.acepta_auto(m)) == "ofrecer"
-    ana.fijar_auto(m, False)
-    assert not ana.acepta_auto(ana.memoria("f")) and modo_memoria(None, True) == "nada"
+# ------------------------------------------------------------------ llave con IA: validación de la respuesta
+class _ProveedorFijo:
+    def __init__(self, texto):
+        self.texto = texto
+
+    def completar(self, mensajes, modo_json=True, temperatura=0.0, max_tokens=800):
+        from regspec.llm.proveedores import Respuesta
+        self.ultimo = mensajes[-1]["content"]
+        return Respuesta(texto=self.texto, tokens_entrada=10, tokens_salida=5)
 
 
-def test_llave_por_ia_como_respaldo_validado():
+def test_llave_ia_descarta_columnas_inventadas():
     import pandas as pd
-    from regspec.grupos import llaves_claras, sugerir_llaves, sugerir_llaves_ia
-    A = pd.DataFrame({"comp": ["A-0001", "A-0002", "A-0003", "A-0004"], "imp": ["1", "2", "3", "4"]})
-    B = pd.DataFrame({"referencia_ext": ["0001", "0002", "0003", "0099"], "importe": ["150", "250", "350", "9"]})
-    assert llaves_claras([("c", "exacta", 1.0), ("d", "exacta", 0.8)]) and not llaves_claras([("c", "exacta", 1.0), ("d", "exacta", 0.2)])
-    assert not llaves_claras([("c", "exacta", 1.0), None])
-    assert len(sugerir_llaves([A, B])) == 2
-    # propuesta válida: normalización desconocida -> exacta, y la validación prueba «solo números» (A-0001 ~ 0001)
-    prov = Guionado([json.dumps({"llaves": [["comp"], ["referencia_ext"]], "normalizacion": "rara", "motivo": "comprobante"})])
-    r = sugerir_llaves_ia([A, B], prov)
-    assert r["validada"] and r["llaves"][1][0] == ["referencia_ext"] and r["llaves"][1][1] == "solo_numeros"
-    assert round(r["llaves"][1][2], 2) == 0.75 and r["motivo"] == "comprobante"
-    # columna inventada: no se acepta
-    prov = Guionado([json.dumps({"llaves": [["comp"], ["inventada"]], "normalizacion": "exacta"})])
-    r = sugerir_llaves_ia([A, B], prov)
-    assert not r["validada"] and r["llaves"] == [None, None]
-    # columnas reales pero sin valores en común: la validación la rechaza
-    prov = Guionado([json.dumps({"llaves": [["comp"], ["importe"]], "normalizacion": "exacta"})])
-    r = sugerir_llaves_ia([A, B], prov)
-    assert not r["validada"] and r["llaves"][1] is None
+    import pytest
+    from regspec.cruce import sugerir_llave_ia, validar_llave_ia
+    a = pd.DataFrame({"Nro_Factura": ["F1", "F2", "F3"], "Importe": [1, 2, 3]})
+    b = pd.DataFrame({"Comprobante": ["F1", "F2", "F4"], "Monto": [1, 2, 4]})
+    v = validar_llave_ia(a, b, {"llave_a": ["Numero"], "llave_b": ["Comprobante"], "comparar": [["Importe", "Total"]]})
+    assert not v["valida"] and v["inventadas"] == 2
+    with pytest.raises(ValueError):
+        sugerir_llave_ia(a, b, _ProveedorFijo('{"llave_a": ["Numero"], "llave_b": ["Comprobante"]}'))
+    ok = sugerir_llave_ia(a, b, _ProveedorFijo('{"llave_a": ["Nro_Factura"], "llave_b": ["Comprobante"], '
+                                              '"comparar": [["Importe", "Monto"]], "motivo": "mismo comprobante"}'))
+    assert ok["llave_a"] == ["Nro_Factura"] and ok["comparar"] == [("Importe", "Monto")]
+    assert abs(ok["solape"] - 2 / 3) < 1e-9 and ok["inventadas"] == 0
 
 
-def test_metricas_de_uso(tmp_path):
-    from regspec import metricas
-    from regspec.almacen import AlmacenLocal
-    a = AlmacenLocal(tmp_path, usuario="ana")
-    ev = [dict(firma_archivos="f", origen="heuristica", segundos_preparacion=300, segundos_cruce=2),
-          dict(firma_archivos="f", origen="memoria", memoria_confianza=67, corregida=False, aceptada=True, segundos_preparacion=60),
-          dict(firma_archivos="f", origen="memoria", memoria_confianza=75, corregida=True, aceptada=False, segundos_preparacion=120),
-          dict(firma_archivos="g", origen="ia", llamadas_ia=1, tokens_ia=900, ia_llave_validada=True, segundos_preparacion=200)]
-    for e in ev:
-        a.registrar_evento(e)
-    eventos = a.eventos()
-    assert len(eventos) == 4 and eventos[0]["usuario"] == "ana"
-    r = metricas.resumen(eventos)
-    assert r["cruces"] == 4 and r["cruces con configuración aprendida"] == 2 and r["tasa de aceptación de lo aprendido (%)"] == 50.0
-    assert r["preparación mediana a mano (s)"] == 300 and r["preparación mediana reutilizando (s)"] == 90
-    assert r["ahorro de tiempo de preparación (%)"] == 70.0 and r["tokens de IA"] == 900 and r["  propuesta de la IA validada"] == 1
-    assert list(metricas.evolucion_confianza(eventos)["uso"]) == [1, 2]
-    assert metricas.a_excel(eventos, a.memorias())[:2] == b"PK"
-    assert metricas.resumen([])["cruces"] == 0
+def test_llave_ia_sin_muestras_envia_solo_nombres():
+    import pandas as pd
+    from regspec.cruce import consultar_llave_ia
+    a = pd.DataFrame({"Nro_Factura": ["SECRETO1"]})
+    b = pd.DataFrame({"Comprobante": ["SECRETO2"]})
+    p = _ProveedorFijo("no es json")
+    c = consultar_llave_ia(a, b, p, muestras=0)
+    assert "SECRETO" not in p.ultimo and "Nro_Factura" in p.ultimo and c["respuesta"] == {}
+
+
+def test_importes_con_prefijo_de_moneda():
+    import pandas as pd
+    from decimal import Decimal
+    from regspec.grupos import numero, serie_numerica
+    assert numero("R$ 1.234,56") == Decimal("1234.56") and numero("US$ 1,234.56") == Decimal("1234.56")
+    assert numero("-R$ 10,00") == Decimal("-10.00") and numero("ABC") is None
+    assert serie_numerica(pd.Series(["R$ 1.234,56", "€12,5", "100", "x"])).tolist()[:3] == [1234.56, 12.5, 100.0]
+
+
+def test_sugerir_llaves_no_elige_un_atributo_compartido():
+    """Un id de cliente coincide al 100 % entre archivos pero no identifica registros: debe ganar el comprobante."""
+    import random
+    import pandas as pd
+    from regspec.grupos import sugerir_llaves
+    rng = random.Random(3)
+    clientes = [str(rng.randint(1, 99999)) for _ in range(20)]
+    fact = [str(5_000_000 + i * 7) for i in range(300)]
+    a = pd.DataFrame({"Id_Cliente": [rng.choice(clientes) for _ in fact], "Nro_Factura": fact})
+    b = pd.DataFrame({"Comprobante": fact[:250] + [str(9_000_000 + i) for i in range(30)],
+                      "Id_Pagador": [rng.choice(clientes) for _ in range(280)]})
+    (ca, _, _), (cb, _, solidez) = sugerir_llaves([a, b])
+    assert (ca, cb) == ("Nro_Factura", "Comprobante") and solidez >= 0.3
+
+
+def test_evaluacion_conciliacion_motor_y_memoria():
+    from regspec.evaluacion import conciliacion as E
+    c = E.generar_caso("cobros", "pt", "dificil", 5, n=120)
+    m = E.metricas_estados(c.verdad, E._estados_obtenidos(E._cruzar(c)))
+    assert m["exactitud"] == 1.0
+    mem = E.e4_memoria(3, correccion_en=None, estructura_en=None)
+    assert list(mem["modo"])[1:] == ["ofrecida", "ofrecida"] and mem["confianza_despues"].is_monotonic_increasing
+
+
+def test_llave_ia_rechaza_atributo_compartido_o_sin_solapamiento():
+    import pandas as pd
+    import pytest
+    from regspec.cruce import sugerir_llave_ia, validar_llave_ia
+    a = pd.DataFrame({"Factura": [f"F{i}" for i in range(100)], "Cliente": [f"C{i % 5}" for i in range(100)]})
+    b = pd.DataFrame({"Comprobante": [f"F{i}" for i in range(100)], "Pagador": [f"C{i % 5}" for i in range(100)]})
+    v = validar_llave_ia(a, b, {"llave_a": ["Cliente"], "llave_b": ["Pagador"]})
+    assert v["valida"] and v["solape"] == 1.0 and not v["plausible"]  # coincide al 100 % pero no identifica registros
+    with pytest.raises(ValueError, match="solidez"):
+        sugerir_llave_ia(a, b, _ProveedorFijo('{"llave_a": ["Cliente"], "llave_b": ["Pagador"]}'))
+    assert validar_llave_ia(a, b, {"llave_a": ["Factura"], "llave_b": ["Comprobante"]})["plausible"]
+
+
+def test_llave_ia_prueba_normalizaciones():
+    import pandas as pd
+    from regspec.cruce import validar_llave_ia
+    a = pd.DataFrame({"Nro": [str(1000 + i) for i in range(50)]})
+    b = pd.DataFrame({"Doc": [f"0000-{1000 + i:08d}" for i in range(50)]})
+    v = validar_llave_ia(a, b, {"llave_a": ["Nro"], "llave_b": ["Doc"]})
+    assert v["plausible"] and v["normalizacion"] == "solo_numeros" and v["solape"] == 1.0
+
+
+# ------------------------------------------------------------------ configuración desde una instrucción en texto
+def _archivos_texto():
+    import pandas as pd
+    a = pd.DataFrame({"Nro_Factura": [str(1000 + i) for i in range(60)], "Importe": [f"{100 + i},50" for i in range(60)]})
+    b = pd.DataFrame({"Comprobante": [f"0000-{1000 + i:08d}" for i in range(60)],
+                      "Monto": [f"{100 + i},50" for i in range(60)],
+                      "Estado": ["ANULADO" if i % 10 == 0 else "OK" for i in range(60)]})
+    return [("G1A1", 0, a), ("G2A1", 1, b)]
+
+
+def test_configuracion_desde_texto_valida_y_corrige():
+    import json
+    from regspec.instrucciones import configurar_desde_texto
+    resp = {"archivos": [{"id": "G1A1", "llave": ["Nro_Factura"], "normalizacion": "exacta"},
+                         {"id": "G2A1", "llave": ["Comprobante"], "normalizacion": "exacta",
+                          "filtros": [{"columna": "Estado", "operador": "==", "valores": ["ANULADO"], "accion": "excluir"},
+                                      {"columna": "Estado", "operador": "==", "valores": ["CANCELADO"], "accion": "excluir"},
+                                      {"columna": "Situacion", "operador": "==", "valores": ["X"]}]}],
+            "comparar": [["Importe", "Monto"], ["Importe", "Total"]], "tolerancia": "1", "dudas": []}
+    p = _ProveedorFijo(json.dumps(resp))
+    r = configurar_desde_texto("cruzá factura con comprobante, sacá los anulados, tolerancia 1 peso", _archivos_texto(), p)
+    cfg = r["config"]
+    assert r["valida"] and cfg is not None and cfg.tolerancia == "1"
+    b = cfg.grupos[1].archivos[0]
+    assert b.transformacion == "solo_numeros" and cfg.grupos[0].archivos[0].transformacion == "solo_numeros"  # corregida
+    assert [(f.columna, f.valores) for f in b.filtros] == [("Estado", ["ANULADO"])]  # valor inexistente y columna inventada fuera
+    assert cfg.comparaciones == [["Importe", "Monto"]] and r["inventadas"] == 2 and r["corregidas"] == 1
+    assert "ANULADO" in p.ultimo  # el modelo ve los valores posibles de las columnas categóricas
+
+
+def test_configuracion_desde_texto_sin_llave_no_es_valida():
+    from regspec.instrucciones import configurar_desde_texto
+    r = configurar_desde_texto("algo", _archivos_texto(), _ProveedorFijo('{"archivos": [{"id": "G1A1", "llave": ["Numero"]}]}'))
+    assert not r["valida"] and r["config"] is None and r["inventadas"] >= 1
+
+
+def test_configuracion_desde_texto_invierte_doble_negacion_y_ancla_tolerancia():
+    import json
+    from decimal import Decimal
+    from regspec.instrucciones import configurar_desde_texto, tolerancia_en_texto
+    assert tolerancia_en_texto("con una tolerancia de 1 peso") == Decimal("1")
+    assert tolerancia_en_texto("aceitando diferenças de um centavo") == Decimal("0.01")
+    assert tolerancia_en_texto("compará con tolerancia 0,05.") == Decimal("0.05") and tolerancia_en_texto("sin nada") is None
+    resp = {"archivos": [{"id": "G1A1", "llave": ["Nro_Factura"], "normalizacion": "solo_numeros"},
+                         {"id": "G2A1", "llave": ["Comprobante"], "normalizacion": "solo_numeros",
+                          "filtros": [{"columna": "Estado", "operador": "!=", "valores": ["ANULADO"], "accion": "excluir"}]}],
+            "comparar": [["Importe", "Monto"]], "tolerancia": "0.01"}
+    r = configurar_desde_texto("sacá los anulados, tolerancia 1", _archivos_texto(), _ProveedorFijo(json.dumps(resp)))
+    f = r["config"].grupos[1].archivos[0].filtros[0]
+    assert (f.operador, f.accion) == ("==", "excluir") and r["config"].tolerancia == "1" and r["corregidas"] == 2

@@ -17,7 +17,6 @@ mayúsculas sin espacios); tolerancia (en importes); exclusión (filtros previos
 from __future__ import annotations
 
 import io
-import json
 import re
 import unicodedata
 from dataclasses import dataclass, field
@@ -67,6 +66,7 @@ def numero(v) -> Optional[Decimal]:
     if v is None or (isinstance(v, float) and v != v):
         return None
     t = str(v).strip().replace(" ", "").replace("$", "")
+    t = re.sub(r"^([+-]?)[A-Za-z€]{1,3}(?=[\d+-])", r"\1", t)  # prefijo de moneda: R$, US$, U$S, €
     if not t or t.lower() in ("nan", "none"):
         return None
     if "," in t and "." in t:
@@ -82,6 +82,7 @@ def numero(v) -> Optional[Decimal]:
 def serie_numerica(s: pd.Series) -> pd.Series:
     """Versión vectorizada de `numero` (float; NaN si no es numérico). Acepta 1.234,56 · 1,234.56 · 12,5 · $ 100."""
     t = s.astype("string").str.strip().str.replace(r"[\s$]", "", regex=True)
+    t = t.str.replace(r"^([+-]?)[A-Za-z€]{1,3}(?=[\d+-])", r"\1", regex=True)  # prefijo de moneda: R$, US$, €
     coma, punto = t.str.contains(",", regex=False), t.str.contains(".", regex=False)
     coma_ultima = t.str.rfind(",") > t.str.rfind(".")
     a = t.mask(coma & punto & coma_ultima, t.str.replace(".", "", regex=False).str.replace(",", ".", regex=False))
@@ -363,7 +364,8 @@ def _parece_llave(nombre: str, serie: pd.Series) -> bool:
     if s.nunique() < 2:
         return False
     fechas = s.str.match(r"^\d{1,4}[-/]\d{1,2}[-/]\d{1,4}").mean()
-    decimales = s.str.match(r"^-?\d+[.,]\d{1,3}$").mean()
+    # importes: 12,5 · 1234.56 · 1.234,56 · 1,234.56 · R$ 1.234,56
+    decimales = s.str.match(r"^-?\d+[.,]\d{1,3}$|^[-+]?[^\d\s]{0,3}\s?\d{1,3}([.,]\d{3})+[.,]\d{2}$").mean()
     return fechas < 0.5 and decimales < 0.5
 
 
@@ -386,6 +388,21 @@ def _cobertura(anchor: set, serie: pd.Series, tr: str, memo: Optional[dict] = No
     return max(k / len(anchor), k / n)
 
 
+SOLIDEZ_MINIMA = 0.5  # por debajo, la llave no se considera clara (código) ni plausible (LLM)
+
+
+def _unicidad(serie: pd.Series) -> float:
+    """Proporción de valores distintos en una muestra: una llave identifica registros (≈1); un atributo compartido
+    por muchos registros (cliente, sucursal, estado) tiene unicidad baja aunque sus valores coincidan entre archivos."""
+    s = _muestra(serie)
+    return s.nunique() / max(1, len(s))
+
+
+def _factor_unicidad(u: float) -> float:
+    """Penaliza columnas poco únicas: 1 si al menos la mitad de los valores son distintos; proporcional por debajo."""
+    return min(1.0, u / 0.5)
+
+
 def puntaje_nombre(nombre: str) -> float:
     tokens = [t for t in re.split(r"[^a-z0-9]+", nombre.lower()) if t]
     ids = ("id", "nro", "numero", "num", "codigo", "cod", "clave", "llave", "doc", "documento", "comprobante",
@@ -399,9 +416,12 @@ def sugerir_llaves(tablas: list[pd.DataFrame]) -> list[Optional[tuple[str, str, 
 
     La primera tabla es el ancla. Para cada columna candidata del ancla y cada transformación se busca,
     en cada una de las demás tablas, la columna con mayor contención de valores (filtrando antes por el
-    perfil de dígitos, para que un padrón de millones de filas no sea costoso). Gana la combinación que
-    mejor vincula a todas las tablas; la misma transformación se aplica a todas para que las llaves sean
-    comparables. Si ninguna columna vincula, se usa el nombre de la columna y la unicidad de sus valores.
+    perfil de dígitos, para que un padrón de millones de filas no sea costoso). La contención se pondera
+    por la unicidad de las columnas: un atributo compartido (cliente, sucursal) puede coincidir al 100 %
+    sin identificar registros. Gana la combinación que mejor vincula a todas las tablas; la misma
+    transformación se aplica a todas para que las llaves sean comparables. El tercer valor devuelto es la
+    solidez de la llave (contención × factor de unicidad): por debajo de SOLIDEZ_MINIMA la llave no es clara y la app
+    ofrece consultar al LLM. Si ninguna columna vincula, se usa el nombre de la columna y la unicidad.
     """
     if not tablas:
         return []
@@ -410,16 +430,18 @@ def sugerir_llaves(tablas: list[pd.DataFrame]) -> list[Optional[tuple[str, str, 
     ancla = tablas[0]
     memo: dict = {}
     series = [{c: df[c] for c in cs} for df, cs in zip(tablas, cols)]
+    unic = [{c: _factor_unicidad(_unicidad(df[c])) for c in cs} for df, cs in zip(tablas, cols)]
     mejor = None  # (puntaje, col_ancla, tr, [(col, cob) por tabla])
     for ca in sorted(cols[0], key=lambda c: -puntaje_nombre(str(c)))[:10]:
         for tr in ("exacta", "solo_numeros"):
             a_vals = set(pd.unique(transformar_serie(ancla[ca].dropna(), tr))) - {""}
             if len(a_vals) < 2:
                 continue
-            elegidas, total = [(ca, 1.0)], 0.0
-            for sr, cs, pf in zip(series[1:], cols[1:], perfiles[1:]):
+            fa = unic[0][ca]
+            elegidas, total = [(ca, fa)], 0.0
+            for sr, cs, pf, un in zip(series[1:], cols[1:], perfiles[1:], unic[1:]):
                 cand = [c for c in cs if abs(pf[c] - perfiles[0][ca]) <= 1.5]
-                cobs = [(c, _cobertura(a_vals, sr[c], tr, memo)) for c in cand]
+                cobs = [(c, _cobertura(a_vals, sr[c], tr, memo) * min(fa, un[c])) for c in cand]
                 c_best = max(cobs, key=lambda x: (x[1], puntaje_nombre(str(x[0])))) if cobs else (None, 0.0)
                 elegidas.append(c_best)
                 total += c_best[1]
@@ -428,7 +450,7 @@ def sugerir_llaves(tablas: list[pd.DataFrame]) -> list[Optional[tuple[str, str, 
                 mejor = (puntaje, ca, tr, elegidas)
     out: list[Optional[tuple[str, str, float]]] = []
     for i, df in enumerate(tablas):
-        if mejor is not None and mejor[0] >= 0.3 and mejor[3][i][0] is not None and mejor[3][i][1] >= 0.3:
+        if mejor is not None and mejor[0] >= SOLIDEZ_MINIMA and mejor[3][i][0] is not None and mejor[3][i][1] >= SOLIDEZ_MINIMA:
             out.append((mejor[3][i][0], mejor[2], mejor[3][i][1]))
             continue
         cs = cols[i] or [c for c in df.columns if not str(c).startswith("_")]
@@ -440,87 +462,3 @@ def sugerir_llaves(tablas: list[pd.DataFrame]) -> list[Optional[tuple[str, str, 
             return (s.nunique() / max(1, len(s))) + puntaje_nombre(str(c))
         out.append((max(cs, key=score), "exacta", 0.0))
     return out
-
-
-# ------------------------------------------------------------------ llave con IA: respaldo validado del código
-
-
-UMBRAL_LLAVE_CLARA = 0.6
-
-
-def llaves_claras(sugeridas: list, umbral: float = UMBRAL_LLAVE_CLARA) -> bool:
-    """El código encontró una llave clara si todas las tablas (salvo el ancla) cubren al menos `umbral` del ancla."""
-    if len(sugeridas) < 2 or any(s is None for s in sugeridas):
-        return False
-    return all(s[2] >= umbral for s in sugeridas[1:])
-
-
-def _llave_compuesta(df: pd.DataFrame, cols: list[str], tr: str) -> set:
-    partes = [transformar_serie(df[c], tr) for c in cols]
-    k = partes[0]
-    for p in partes[1:]:
-        k = k + "|" + p
-    vacia = "|".join([""] * len(cols))
-    return set(pd.unique(k)) - {"", vacia}
-
-
-def cobertura_llave(ancla: pd.DataFrame, cols_ancla: list[str], df: pd.DataFrame, cols: list[str], tr: str) -> float:
-    """Contención (en la dirección más favorable) entre la llave del ancla y la de otra tabla."""
-    a, b = _llave_compuesta(ancla, cols_ancla, tr), _llave_compuesta(df, cols, tr)
-    if not a or not b:
-        return 0.0
-    return len(a & b) / min(len(a), len(b))
-
-
-def sugerir_llaves_ia(tablas: list[pd.DataFrame], proveedor, nombres: Optional[list[str]] = None, muestras: int = 5,
-                      umbral: float = 0.3) -> dict:
-    """Pide al LLM la llave de cada tabla cuando el código no encontró una clara. Respaldo **validado**:
-
-    1. al LLM solo se le envían nombres de columna y `muestras` valores de ejemplo por columna;
-    2. se descartan columnas inventadas y normalizaciones desconocidas;
-    3. la llave propuesta se comprueba midiendo, con código, la cobertura de valores contra el ancla; una tabla
-       queda con la llave de la IA solo si la cobertura alcanza `umbral`.
-
-    Devuelve {"llaves": [(columnas, transformacion, cobertura) | None por tabla], "validada": bool,
-    "motivo": str, "tokens": int}.
-    """
-    nombres = nombres or [f"tabla_{i + 1}" for i in range(len(tablas))]
-
-    def perfil(df):
-        return {str(c): [str(v)[:40] for v in _muestra(df[c], muestras).head(muestras)]
-                for c in df.columns if not str(c).startswith("_")}
-
-    tablas_txt = "\n".join(f"{i}. {n}: {json.dumps(perfil(df), ensure_ascii=False)}" for i, (n, df) in enumerate(zip(nombres, tablas)))
-    pedido = (
-        "Quiero conciliar estas tablas: hay que encontrar en cada una la(s) columna(s) que identifican el mismo "
-        "registro (la llave), para poder cruzarlas. Columnas con ejemplos de valores:\n"
-        f"{tablas_txt}\n"
-        "Todas las llaves deben tener la misma cantidad de columnas y el mismo significado, en el mismo orden. "
-        f"Normalizaciones posibles: {', '.join(TRANSFORMACIONES)} (una sola, común a todas). "
-        'Respondé SOLO JSON: {"llaves": [["col", ...] por tabla, en orden], "normalizacion": "…", "motivo": "breve"}. '
-        "Usá exactamente los nombres de columna dados."
-    )
-    r = proveedor.completar([{"role": "user", "content": pedido}], modo_json=True, temperatura=0.0, max_tokens=800)
-    t = r.texto
-    d = json.loads(t[t.find("{"): t.rfind("}") + 1])
-    tokens = int(getattr(r, "tokens_entrada", 0) or 0) + int(getattr(r, "tokens_salida", 0) or 0)
-    tr = d.get("normalizacion") if d.get("normalizacion") in TRANSFORMACIONES else "exacta"
-    propuestas = list(d.get("llaves") or [])
-    propuestas += [[]] * (len(tablas) - len(propuestas))
-    cols = []
-    for df, p in zip(tablas, propuestas):
-        p = [p] if isinstance(p, str) else list(p or [])
-        cols.append([c for c in p if c in df.columns])
-    n = len(cols[0])
-    out: list = [None] * len(tablas)
-    if n and all(len(c) == n for c in cols):
-        def evaluar(tr_):
-            cobs = [cobertura_llave(tablas[0], cols[0], df, c, tr_) for df, c in zip(tablas[1:], cols[1:])]
-            return [(cols[0], tr_, 1.0)] + [(c, tr_, cob) if cob >= umbral else None for c, cob in zip(cols[1:], cobs)]
-        out = evaluar(tr)
-        if tr == "exacta" and any(x is None for x in out):  # segunda oportunidad: la misma llave, solo números
-            alt = evaluar("solo_numeros")
-            if sum(x is not None for x in alt) > sum(x is not None for x in out):
-                out = alt
-    validada = all(x is not None for x in out)
-    return {"llaves": out, "validada": validada, "motivo": str(d.get("motivo", ""))[:300], "tokens": tokens}

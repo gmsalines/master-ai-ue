@@ -362,33 +362,95 @@ def llave_clara(sugeridas: list[ParLlave], umbral: float = 0.6) -> bool:
     return bool(sugeridas) and sugeridas[0].puntaje >= umbral
 
 
-def sugerir_llave_ia(a: pd.DataFrame, b: pd.DataFrame, proveedor, muestras: int = 5) -> dict:
-    """Pregunta al LLM por la llave y las columnas a comparar, enviando solo nombres de columna y unas pocas muestras.
+def consultar_llave_ia(a: pd.DataFrame, b: pd.DataFrame, proveedor, muestras: int = 5) -> dict:
+    """Consulta al LLM por la llave, SIN validar la respuesta (la usa la evaluación para medir alucinaciones).
 
-    La respuesta se valida contra las columnas reales (no se aceptan columnas inventadas) y la llave se
-    comprueba midiendo el solapamiento de valores. Devuelve {"llave_a", "llave_b", "comparar", "motivo", "solape"}.
+    Con muestras=0 el modelo recibe solo los nombres de columna (minimización de datos); con muestras>0 recibe
+    además hasta `muestras` valores de ejemplo por columna. Devuelve la respuesta cruda del modelo y los tokens.
     """
     import json as _json
 
     def perfil(df):
-        return {c: [str(v) for v in df[c].dropna().astype(str).head(muestras)] for c in df.columns if not c.startswith("_")}
+        cols = [c for c in df.columns if not str(c).startswith("_")]
+        if muestras <= 0:
+            return cols
+        return {c: [str(v) for v in df[c].dropna().astype(str).head(muestras)] for c in cols}
 
+    que = "Columnas con ejemplos de valores" if muestras > 0 else "Nombres de columna"
     pedido = (
-        "Tengo dos tablas que quiero conciliar. Columnas con ejemplos de valores:\n"
+        f"Tengo dos tablas que quiero conciliar. {que}:\n"
         f"A: {_json.dumps(perfil(a), ensure_ascii=False)}\nB: {_json.dumps(perfil(b), ensure_ascii=False)}\n"
         "Indicá qué columna(s) identifican el mismo registro en ambas (llave) y qué pares de columnas conviene comparar "
         '(importes, fechas). Respondé SOLO JSON: {"llave_a": ["col"], "llave_b": ["col"], '
         '"comparar": [["colA", "colB"]], "motivo": "breve"}. Usá exactamente los nombres de columna dados.'
     )
     r = proveedor.completar([{"role": "user", "content": pedido}], modo_json=True, temperatura=0.0, max_tokens=800)
-    t = r.texto
-    d = _json.loads(t[t.find("{") : t.rfind("}") + 1])
-    la = [c for c in d.get("llave_a") or [] if c in a.columns]
-    lb = [c for c in d.get("llave_b") or [] if c in b.columns]
-    if not la or len(la) != len(lb):
-        raise ValueError("la IA no propuso una llave válida con las columnas existentes")
-    comparar = [(x, y) for x, y in (d.get("comparar") or []) if x in a.columns and y in b.columns]
-    ka, kb = set(_clave(a, la)), set(_clave(b, lb))
-    solape = len(ka & kb) / max(1, min(len(ka), len(kb)))
+    t = r.texto or ""
+    try:
+        d = _json.loads(t[t.find("{") : t.rfind("}") + 1])
+    except ValueError:
+        d = {}
+    return {"respuesta": d if isinstance(d, dict) else {}, "tokens": r.tokens_entrada + r.tokens_salida}
+
+
+def validar_llave_ia(a: pd.DataFrame, b: pd.DataFrame, d: dict) -> dict:
+    """Filtra la respuesta del LLM contra las columnas reales y mide el solapamiento de la llave propuesta.
+
+    Devuelve {"llave_a", "llave_b", "comparar", "motivo", "solape", "solidez", "inventadas", "valida", "plausible"}:
+    `inventadas` cuenta las columnas propuestas que no existen (alucinaciones), `valida` indica si queda una llave con
+    columnas reales y `plausible` si además es sólida (solapamiento × unicidad >= SOLIDEZ_MINIMA, el criterio del código).
+    """
+    def lista(x):
+        return [str(c) for c in (x if isinstance(x, list) else [x] if x else [])]
+
+    brutas_a, brutas_b = lista(d.get("llave_a")), lista(d.get("llave_b"))
+    la = [c for c in brutas_a if c in a.columns]
+    lb = [c for c in brutas_b if c in b.columns]
+    pares = [p for p in (d.get("comparar") or []) if isinstance(p, (list, tuple)) and len(p) == 2]
+    comparar = [(x, y) for x, y in pares if x in a.columns and y in b.columns]
+    inventadas = (len(brutas_a) - len(la)) + (len(brutas_b) - len(lb)) + sum(
+        (x not in a.columns) + (y not in b.columns) for x, y in pares)
+    from .grupos import SOLIDEZ_MINIMA
+
+    valida = bool(la) and len(la) == len(lb)
+    solape = solidez = 0.0
+    normalizacion = "exacta"
+    if valida:
+        from .grupos import _factor_unicidad, _unicidad, transformar_serie
+
+        def llave(df, cols, tr):
+            partes = [transformar_serie(df[c], tr) for c in cols]
+            k = partes[0]
+            for p in partes[1:]:
+                k = k + "|" + p
+            return k
+
+        # mismo criterio que la sugerencia por código: la llave debe coincidir entre archivos (probando las mismas
+        # normalizaciones) Y identificar registros (unicidad)
+        for tr in ("exacta", "solo_numeros"):
+            sa, sb = llave(a, la, tr), llave(b, lb, tr)
+            ka, kb = set(sa) - {""}, set(sb) - {""}
+            sol = len(ka & kb) / max(1, min(len(ka), len(kb)))
+            sd = sol * min(_factor_unicidad(_unicidad(sa)), _factor_unicidad(_unicidad(sb)))
+            if sd > solidez + 1e-9 or (tr == "exacta"):
+                if sd >= solidez:
+                    solape, solidez, normalizacion = sol, sd, tr
     return {"llave_a": la, "llave_b": lb, "comparar": comparar, "motivo": d.get("motivo", ""), "solape": solape,
-            "tokens": r.tokens_entrada + r.tokens_salida}
+            "solidez": solidez, "normalizacion": normalizacion, "inventadas": inventadas, "valida": valida,
+            "plausible": valida and solidez >= SOLIDEZ_MINIMA}
+
+
+def sugerir_llave_ia(a: pd.DataFrame, b: pd.DataFrame, proveedor, muestras: int = 5) -> dict:
+    """Pregunta al LLM por la llave y las columnas a comparar (solo se usa si el código no encuentra una llave clara).
+
+    La respuesta se valida contra las columnas reales (no se aceptan columnas inventadas) y la llave se
+    comprueba midiendo el solapamiento de valores. Devuelve {"llave_a", "llave_b", "comparar", "motivo", "solape", ...}.
+    """
+    c = consultar_llave_ia(a, b, proveedor, muestras)
+    v = validar_llave_ia(a, b, c["respuesta"])
+    if not v["valida"]:
+        raise ValueError("la IA no propuso una llave válida con las columnas existentes")
+    if not v["plausible"]:
+        raise ValueError(f"la llave propuesta ({' + '.join(v['llave_b'])}) no identifica registros o no coincide entre "
+                         f"los archivos (solidez {v['solidez']:.0%})")
+    return {**v, "tokens": c["tokens"]}

@@ -1,11 +1,13 @@
-# Compilador neuro-simbólico de especificaciones regulatorias
+# Compilador neuro-simbólico de especificaciones regulatorias y conciliación de archivos
+
+*Estado al 1 de octubre de 2026. Rama `siguiente-paso` del repositorio `gmsalines/master-ai-ue`. App publicada en https://conciliacion-tfm.streamlit.app/.*
 
 El sistema tiene dos flujos:
 
 | Flujo | Qué hace | ¿Usa IA? |
 |---|---|---|
 | **1 · Del manual a la especificación** | Lee el manual técnico (MD/TXT/PDF) y produce una especificación formal verificada del archivo regulatorio. | Sí, lo mínimo: primero intenta con código. Se hace una vez por manual. |
-| **2 · Conciliación por grupos** | Se arman **grupos de archivos** (CSV/Excel, o TXT/XML regulatorios leídos con la especificación del flujo 1). En cada archivo se define su **llave** (una o varias columnas) y cómo normalizarla (exacta, solo números, sin ceros a la izquierda, normalizada), más filtros de exclusión. Los archivos de un grupo se combinan concatenando, como base + referencia (lookup por llave) o sumando por llave. El cruce es N-way sobre la llave: presencia en cada grupo, diferencias de importe con tolerancia, duplicados, cobertura; exporta a Excel. | No. La llave se sugiere por código (solapamiento de valores y nombre de columna). |
+| **2 · Conciliación por grupos** | Se arman **grupos de archivos** (CSV/Excel, o TXT/XML regulatorios leídos con la especificación del flujo 1). En cada archivo se define su **llave** (una o varias columnas) y cómo normalizarla (exacta, solo números, sin ceros a la izquierda, normalizada), más filtros de exclusión. Los archivos de un grupo se combinan concatenando, como base + referencia (lookup por llave) o sumando por llave. El cruce es N-way sobre la llave: presencia en cada grupo, diferencias de importe con tolerancia, duplicados, cobertura; exporta a Excel. | Opcional. La llave se sugiere por código y la IA solo entra como respaldo, con validación sobre los datos. La configuración también puede describirse en texto. |
 
 Además, con la especificación el sistema **valida** archivos antes del envío y **genera** el archivo a partir de un CSV, calculando solo los totales de control.
 
@@ -27,6 +29,8 @@ Además, con la especificación el sistema **valida** archivos antes del envío 
           └─► validar datos antes del envío (línea, campo y regla de cada error)
 ```
 
+Secuencia del compilador: parser sin IA → LLM por secciones → verificador de 7 etapas → autocorrección localizada (hasta 4 iteraciones; corta si una corrección no produce cambios).
+
 ## Por qué es un trabajo de IA y no solo de programación
 
 | Pieza | Qué aporta |
@@ -37,6 +41,7 @@ Además, con la especificación el sistema **valida** archivos antes del envío 
 | **Bucle de autocorrección** | El modelo recibe errores concretos (qué, dónde, cómo corregir) y los corrige. La mejora se mide por iteración. |
 | **Anclaje por evidencia** | Cada campo y cada regla deben citar un fragmento literal del manual; si no existe, se trata como alucinación. |
 | **Evaluación por comportamiento** | Mide si la especificación extraída *se comporta* como la de referencia sobre una batería de archivos con errores inyectados, con independencia de cómo nombre los campos. |
+| **LLM + validación determinista en la conciliación** | La IA propone la llave o la configuración a partir de nombres, ejemplos o una descripción en texto; el código comprueba contra los datos que lo propuesto exista y funcione antes de aplicarlo. |
 
 ## Estructura
 
@@ -51,18 +56,22 @@ regspec/
   verificador.py    verificador formal en 7 etapas
   generador.py      generación del informe con autocompletado de totales de control
   base_sin_ia.py    línea base: parser convencional por reglas (sin IA); también primer paso del modo híbrido
-  cruce.py          lectura de archivos, detección de formato y cruce de 2 tablas
-  grupos.py         conciliación N-way por grupos de archivos con llaves (flujo 2, sin IA)
+  cruce.py          lectura de archivos, detección de formato, cruce de 2 tablas, sugerencia de llave (código y LLM)
+  grupos.py         conciliación N-way por grupos de archivos con llaves (flujo 2)
+  instrucciones.py  texto -> configuración del cruce, con validación determinista
   almacen.py        cruces guardados, memoria de configuración y formatos (local o Supabase)
+  metricas.py       métricas de uso de la memoria de configuración (eventos, confianza, exportación a Excel)
   i18n.py           textos de la interfaz en español y portugués
   llm/              proveedores desacoplados, prompts, extractor con bucle
-  evaluacion/       batería de mutaciones, métricas, banco de evaluación
-manuales/           3 manuales ficticios de dificultad creciente
+  evaluacion/       mutaciones, métricas, banco del compilador (ejecutar.py), banco de conciliación (conciliacion.py), informe.py
+manuales/           5 manuales ficticios de dificultad creciente
 gold/               especificaciones de referencia escritas a mano (corpus de evaluación)
 biblioteca/         formatos reales cargados a mano (sin datos): se reconocen solos al subir un archivo
-ejemplos/           CSV para generar un informe; par sistema.csv / presentado.txt para el cruce
-tests/              41 tests
-app.py              demo en Streamlit
+ejemplos/           CSV para generar un informe; par sistema.csv / presentado.txt; ejemplos/grupos/ para la conciliación por grupos
+resultados/         salidas de las evaluaciones (detalle.csv y resumen.md por corrida)
+docs/               notas y migraciones SQL
+tests/              73 tests
+app.py              app en Streamlit
 ```
 
 ## Instalación
@@ -70,8 +79,10 @@ app.py              demo en Streamlit
 ```bash
 python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-python -m pytest                                      # 41 tests, < 1 s
+python -m pytest                                      # 73 tests
 ```
+
+La clave del proveedor va en un archivo `.env` en la raíz, que no se versiona. En Streamlit Cloud va en *Secrets* (ver más abajo).
 
 ## Uso
 
@@ -93,11 +104,11 @@ python -m regspec cruzar ejemplos/cruce_sistema.csv ejemplos/cruce_presentado.tx
 # Conciliación por grupos: en la app, pestaña «Cruzar archivos». Ejemplo en ejemplos/grupos/
 # (Grupo 1 = g1_retenciones_sistema.csv + g1_padron_referencia.csv en modo base + referencia; Grupo 2 = g2_reporte_agente.csv)
 
-# 4. Demo interactiva
+# 4. App
 streamlit run app.py
 ```
 
-Modelo por defecto en Groq: `openai/gpt-oss-120b`. El plan gratuito tiene un cupo diario de tokens por modelo, de unas 6 extracciones por día y por modelo. Cuando se agota, el sistema lo avisa, y se puede seguir con otro modelo (`--modelo openai/gpt-oss-20b`).
+**Modelos.** Por defecto, Groq `openai/gpt-oss-120b`; como alternativa, `openai/gpt-oss-20b` (`--modelo`), que tiene más cupo. El plan gratuito de Groq tiene unos 8.000 tokens por minuto y un cupo diario por modelo que se libera de a poco en 24 horas, de unas 6 extracciones por día y por modelo. Cuando se agota, el sistema lo avisa. Los modelos Qwen no son utilizables en el plan gratuito.
 
 **Consumo mínimo de tokens.** La IA solo interviene donde el código no alcanza:
 
@@ -120,7 +131,9 @@ Medición con `gpt-oss-20b` en Groq (tokens totales por extracción):
 
 Proveedores soportados: `groq`, `openai`, `openrouter`, `ollama` (local, sin clave) y `anthropic`. Todos pasan por la misma interfaz, así que cambiar de modelo no toca el extractor. Esto mitiga la dependencia de un proveedor externo.
 
-## Publicar la demo (Streamlit Cloud, gratis)
+## Publicar la app (Streamlit Cloud, gratis)
+
+Publicada en https://conciliacion-tfm.streamlit.app/.
 
 1. Entrá a share.streamlit.io con tu cuenta de GitHub y elegí **Create app → Deploy a public app from GitHub**: repositorio `gmsalines/master-ai-ue`, rama `siguiente-paso`, archivo `app.py`.
 2. En **Advanced settings → Secrets**, pegá `GROQ_API_KEY`, `SUPABASE_URL` y `SUPABASE_ANON_KEY` (ver `.streamlit/secrets.toml.ejemplo`).
@@ -129,7 +142,7 @@ Proveedores soportados: `groq`, `openai`, `openrouter`, `ollama` (local, sin cla
 Límite a tener en cuenta: el plan gratuito de Streamlit Cloud tiene poca memoria; archivos de referencia de cientos de MB
 (por ejemplo, un padrón de millones de filas) conviene recortarlos a las columnas necesarias antes de subirlos.
 
-## Corpus de evaluación
+## Corpus de evaluación del compilador
 
 | Manual | Formato | Qué lo hace difícil |
 |---|---|---|
@@ -139,19 +152,27 @@ Límite a tener en cuenta: el plan gratuito de Streamlit Cloud tiene poca memori
 | `m4_seguros_pdf` | TXT 100 pos., CRLF | Texto plano como el que sale de un PDF: tablas alineadas con espacios, sin separadores, encabezados y pies de página repetidos, historial de versiones y un **campo obsoleto** que no debe informarse (trampa de alucinación). 10 reglas en prosa. |
 | `m5_beneficiarios_inconsistente` | TXT 60 pos., LF | El manual tiene una **errata**: un campo va de la posición 13 a la 42 (30 posiciones) y la columna de longitud dice 28. Una especificación que copia el manual al pie de la letra no es coherente, y el verificador debe detectarlo. |
 
-Los tres manuales son **ficticios**: no reproducen ningún organismo real.
+Los cinco manuales son **ficticios**: no reproducen ningún organismo real.
 
 ## Protocolo de evaluación
 
 ```bash
+# Compilador (E1)
 python -m regspec evaluar --solo-sin-ia                              # referencia + línea base
-python -m regspec evaluar --proveedor groq --repeticiones 3          # todas las condiciones
-python -m regspec evaluar --proveedor groq --modelo llama-3.1-8b-instant --condiciones llm_1_intento,llm_bucle
+python -m regspec evaluar --proveedor groq --modelo openai/gpt-oss-20b --condiciones llm_1_intento,llm_bucle --repeticiones 1
+python -m regspec evaluar --proveedor groq --manuales m1_retenciones,m2_cuentas --condiciones llm_1_intento,llm_bucle
+
+# Conciliación (E2–E5, E3b con --llm, E6 con --solo-texto)
+python -m regspec.evaluacion.conciliacion -o resultados/eval_conciliacion
+python -m regspec.evaluacion.conciliacion -o resultados/eval_texto_nuevos --solo-texto --semilla-texto 3000 --llm groq --modelo openai/gpt-oss-20b
+
+# Tablas para la memoria
+python -m regspec.evaluacion.informe
 ```
 
-**Costo y límites.** Cada llamada consume unos 5.000 tokens de entrada más la especificación de salida, y una extracción típica usa entre 1 y 4 llamadas. El banco completo (3 manuales × 4 condiciones LLM × 3 repeticiones) ronda el millón de tokens. Antes de correrlo, revisá los límites diarios del plan gratuito del proveedor, porque pueden no alcanzar. Alternativas: un plan pago del mismo proveedor (el costo con un modelo de 70B es bajo), OpenRouter, o Ollama local.
+**Costo y límites.** Cada llamada consume unos 5.000 tokens de entrada más la especificación de salida, y una extracción típica usa entre 1 y 4 llamadas (hasta unos 30.000 tokens cuando el bucle agota las iteraciones, como en m4). Con el plan gratuito de Groq conviene repartir el banco en varios días; la caché evita repetir lo ya hecho. Las filas que fallan por cupo se descartan, no cuentan como respuestas del modelo.
 
-**Condiciones (ablación):**
+**Condiciones del compilador (ablación):**
 
 | Condición | Descripción |
 |---|---|
@@ -162,7 +183,7 @@ python -m regspec evaluar --proveedor groq --modelo llama-3.1-8b-instant --condi
 | `llm_bucle_sin_evidencia` | Igual al anterior, sin retroalimentación de evidencia. Mide el aporte del anclaje. |
 | `llm_bucle_sin_ejecucion` | Igual al anterior, sin la prueba de ida y vuelta. Mide el aporte de la verificación ejecutable. |
 
-**Métricas:**
+**Métricas del compilador:**
 
 - *Estructurales* (contra la gold):
   - F1 de campos (posición y longitud exactas, o etiqueta XML).
@@ -175,28 +196,90 @@ python -m regspec evaluar --proveedor groq --modelo llama-3.1-8b-instant --condi
   - Una detección solo cuenta si la especificación acepta el archivo válido del que deriva la mutación, así que rechazar todo no suma.
 - *Proceso*: especificación válida (sí/no), iteraciones, tokens, latencia.
 
-**Resultados actuales (sin LLM todavía):**
+**Dónde están los resultados** (`resultados/`):
 
-| manual | condición | spec válida | F1 campos | campos exactos | reglas | especificidad | sensibilidad | exact. balanceada |
-|---|---|---|---|---|---|---|---|---|
-| m1 | referencia | 1.00 | 1.00 | 1.00 | 4 | 1.00 | 1.00 | 1.00 |
-| m1 | base_sin_ia | 1.00 | 1.00 | 0.95 | 0 | 1.00 | 0.84 | 0.92 |
-| m2 | referencia | 1.00 | 1.00 | 1.00 | 12 | 1.00 | 1.00 | 1.00 |
-| m2 | base_sin_ia | 1.00 | 1.00 | 0.86 | 0 | 0.20 | 0.00 | 0.10 |
-| m3 | referencia | 1.00 | 1.00 | 1.00 | 6 | 1.00 | 1.00 | 1.00 |
-| m3 | base_sin_ia | 0.00 | 0.00 | 0.00 | 0 | 0.00 | 0.00 | 0.00 |
+| Exp. | Qué mide | Carpeta |
+|---|---|---|
+| E1 | Compilador de manuales | `20260930_linea_base_e1`, `20260930_e1_gptoss120b` (m1–m2), `20260930_e1_gptoss120b_m3m5`, `20260930_e1_gptoss20b` (m3–m5) |
+| E2 | Motor de conciliación y ablación | `eval_conciliacion` (semilla 1000); línea base v1 en `eval_conciliacion_v1_linea_base` |
+| E3 | Sugerencia de llave por código | `eval_conciliacion` |
+| E3b | Sugerencia de llave con LLM | `eval_conciliacion_llm` |
+| E4 | Memoria de configuración | `eval_conciliacion` |
+| E5 | Rendimiento | `eval_conciliacion` |
+| E6 | Texto → configuración | `eval_texto` (semilla 2000, diseño) y `eval_texto_nuevos` (semilla 3000) |
 
-**Primera corrida con LLM** (27 de septiembre, `qwen/qwen3.8-27b` en Groq, sistema completo, n = 1):
+`20260927_194002` y `20260930_e1_parcial` son corridas exploratorias o interrumpidas por cupo; no se usan en la memoria.
 
-| manual | spec válida | iteraciones | F1 campos | campos exactos | reglas | especificidad | sensibilidad | exact. balanceada |
-|---|---|---|---|---|---|---|---|---|
-| m1 | 1.00 | 1 | 1.00 | 0.95 | 4 | 1.00 | 1.00 | 1.00 |
-| m2 | 1.00 | 1 | 1.00 | 1.00 | 12 | 1.00 | 1.00 | 1.00 |
-| m3 | 1.00 | 2 | 1.00 | 1.00 | 6 | 1.00 | 1.00 | 1.00 |
+## Resultados
 
-En m3 la primera respuesta no respetaba el esquema (15 errores: longitudes como texto, separador inválido). El verificador los localizó y la corrección por fragmentos los resolvió en una iteración. Falta repetir con varias semillas, correr la ablación y sumar manuales más difíciles: con un modelo de este tamaño, los tres manuales actuales resultan fáciles.
+### E1 · Compilador de manuales (n = 1)
 
-Lectura de la línea base: el parser convencional resuelve bien una tabla limpia (m1), pero no detecta ninguna violación de reglas. En m2 lee bien las posiciones y aun así la especificación es inservible: no puede leer que la fecha de vencimiento es opcional (está en una nota al pie) y rechaza el 80 % de los archivos válidos. En m3, que está todo en prosa, no extrae nada. Las filas de LLM se completan corriendo el banco con una API key.
+Exactitud balanceada por manual (✓ = especificación válida según el verificador, ✗ = no válida):
+
+| manual | parser sin IA | LLM, 1 intento | LLM + verificador + autocorrección | modelo |
+|---|---|---|---|---|
+| m1 | 0,92 ✓ | 0,98 ✓ | 0,98 ✓ (1 iter.) | gpt-oss-120b |
+| m2 | 0,10 ✓ | 0,98 ✗ | 0,98 ✓ (2 iter.) | gpt-oss-120b |
+| m3 | 0,00 ✗ | 0,00 ✗ | 0,93 ✓ (2 iter.) | gpt-oss-20b |
+| m4 | 0,00 ✗ | 0,00 ✗ | 0,00 ✗ (3 iter., sin progreso) | gpt-oss-20b |
+| m5 | 0,89 ✗ | 1,00 ✗ | 1,00 ✓ (2 iter.) | gpt-oss-20b |
+| **especificaciones válidas** | 2 de 5 | 1 de 5 | 4 de 5 | |
+| **media** | 0,38 | 0,59 | 0,78 | |
+
+- E1 **mezcla modelos** por el cupo: m1–m2 con `gpt-oss-120b` y m3–m5 con `gpt-oss-20b`. Con `gpt-oss-120b`, el bucle se estancó en m3, m4 y m5 («la corrección no produjo cambios») y ninguna especificación quedó válida.
+- En m2 el sistema completo extrajo 10 de 12 reglas.
+- m4 (texto de PDF) falló en ambos modelos, pero el sistema **no entregó una especificación incorrecta como válida**: avisó del fallo.
+- En m5 el intento único se comporta bien (1,00) pero arrastra la errata del manual; el verificador la bloquea y el bucle la corrige.
+- **Hallazgo:** el verificador bloquea siempre las especificaciones defectuosas, pero que la autocorrección funcione depende del modelo.
+
+### E2 · Motor de conciliación
+
+24 casos sintéticos: 4 escenarios × 3 variantes de nombres (es, en, pt) × 2 dificultades.
+
+| condición | casos | exactitud |
+|---|---|---|
+| completa | 24 | 100,0 % |
+| sin transformación de llave | 16 | 5,3 % |
+| sin tolerancia | 24 | 90,0 % |
+| sin exclusión | 24 | 95,0 % |
+
+### E3 · Sugerencia de llave por código
+
+24 de 24 casos con llave clara y correcta, en las tres variantes de idioma y las dos dificultades. Tiempo medio: unos 54 ms por caso.
+
+### E3b · Sugerencia de llave con LLM
+
+| información enviada | llave correcta | incorrecta aceptada (solo validación estructural) | incorrecta aceptada (+ solidez) | correcta rechazada | columnas inventadas | tokens |
+|---|---|---|---|---|---|---|
+| solo nombres | 45,8 % | 54,2 % | 0,0 % | 0,0 % | 0 de 170 | 365 |
+| nombres + 5 ejemplos | 75,0 % | 20,8 % | 0,0 % | 0,0 % | 0 de 142 | 667 |
+
+El modelo no inventa columnas, pero sí elige columnas equivocadas. La validación por solidez las frena todas sin rechazar ninguna correcta.
+
+### E4 · Memoria de configuración
+
+- **Proceso estable (30 ejecuciones):** la confianza pasa del 95 % en la ejecución 22, a partir de la cual se aplica sola. 23 intervenciones en total, frente a 90 configurando cada vez desde cero.
+- **Proceso con cambios (25 ejecuciones:** una exclusión nueva en la 8 y un cambio de columna en la 16): 3 intervenciones en la primera ejecución y 1,17 de media en las siguientes. La corrección baja la confianza y el cambio de estructura reinicia la memoria, así que en este escenario nunca se llega a la aplicación automática.
+
+### E5 · Rendimiento
+
+| registros A | registros B | sugerir llave | cruce | exactitud |
+|---|---|---|---|---|
+| 900 | 1.000 | 0,06 s | 0,07 s | 100 % |
+| 9.000 | 10.000 | 0,17 s | 0,29 s | 100 % |
+| 90.000 | 100.000 | 0,75 s | 2,46 s | 100 % |
+| 900.000 | 1.000.000 | 7,66 s | 31,12 s | 100 % |
+
+### E6 · Texto → configuración
+
+| conjunto | instrucciones | config. completa sin validar | con validación | exactitud del cruce | tokens |
+|---|---|---|---|---|---|
+| semilla 2000 (diseño) | 24 | 50,0 % | 91,7 % | 99,8 % | 1.024 |
+| semilla 3000 (nuevas) | 23 (1 excluida por cupo) | 65,2 % | 87,0 % | 95,6 % | 990 |
+
+- Las reglas de validación se diseñaron sobre la semilla 2000; la 3000 confirma que generalizan.
+- Las instrucciones explícitas quedan al 100 % validadas en ambos conjuntos. Las semánticas, que describen lo que se quiere sin nombrar las columnas, quedan en 83,3 % y 75,0 %.
+- Columnas inventadas: 1 y 2 respectivamente; la validación las detecta.
 
 ## Decisiones y supuestos del DSL
 
@@ -210,15 +293,27 @@ Lectura de la línea base: el parser convencional resuelve bien una tabla limpia
 ## Conciliación: sugerencia de llaves y archivos grandes
 
 - La llave se sugiere **por código, en conjunto para todos los archivos**: se prueban las columnas identificadoras del primer archivo (descartando importes, fechas y textos) y, para cada una, la columna de cada otro archivo con mayor contención de valores, con la misma normalización para todos (exacta o solo números). Un filtro previo por perfil de dígitos evita recorrer columnas que no pueden coincidir.
+- Puntaje de cada par: contención × f(unicidad), con f(u) = min(1, u / 0,5). Una llave es **clara** si su solidez llega a 0,5.
+- Si ninguna llave es clara, el botón de llave con IA (`sugerir_llave_ia`) envía al LLM los nombres de columna y 5 ejemplos por archivo. Lo que propone se valida: las columnas tienen que existir y la solidez tiene que llegar a 0,5. El umbral de 0,5 se ajustó a posteriori.
 - Excel: se elige la hoja con más datos y se detecta la fila de encabezado (reportes con títulos arriba).
 - TXT delimitado de un solo tipo de registro: se lee con pandas; un padrón de ~4,9 millones de líneas (370 MB) se lee en ~8 s y el cruce completo (lookup contra el padrón + 3 grupos) tarda ~5 s. La validación campo a campo se hace en «Validar archivo».
 - La app acepta archivos de hasta 1 GB (`.streamlit/config.toml`).
 
+## Describir el cruce con texto
+
+En el expander «Describir el cruce con texto» el usuario escribe qué quiere cruzar en lenguaje natural. El LLM propone la configuración (`regspec/instrucciones.py`) y una validación determinista la corrige antes de aplicarla:
+
+- las columnas, operadores y valores tienen que existir en los archivos;
+- los importes tienen que ser columnas numéricas;
+- la normalización de la llave se ajusta según la solidez;
+- un filtro con doble negación que excluiría la mayoría de los registros se invierte;
+- la tolerancia se ancla al número que aparece en el texto.
+
 ## Cruces guardados e idiomas
 
-- Después de cruzar, «💾 Guardar este cruce» guarda la **configuración** (grupos, llaves, normalización, filtros, columnas traídas, importes y tolerancia) y el **resultado** (resumen + Excel) en `cruces_guardados/` (fuera del repositorio).
+- Después de cruzar, «💾 Guardar este cruce» guarda la **configuración** (grupos, llaves, normalización, filtros, columnas traídas, importes y tolerancia) y el **resultado** (resumen + Excel). En modo local va a `cruces_guardados/` (fuera del repositorio); con usuarios, a Supabase.
 - El período siguiente se elige el cruce en «Partir de un cruce guardado» (o «Reutilizar configuración» en la pestaña «Mis cruces»): la configuración se aplica a los archivos nuevos por posición (grupo y orden dentro del grupo) y avisa si falta alguna columna.
-- El almacenamiento está detrás de la interfaz `Almacen`; para la versión publicada con usuarios se reemplaza `AlmacenLocal` por una base de datos.
+- El almacenamiento está detrás de la interfaz `Almacen`, con dos implementaciones: `AlmacenLocal` y `AlmacenSupabase`.
 - La interfaz está en **español y portugués** (selector 🌐 en la barra lateral; por defecto, el idioma del navegador). Los textos se escriben en español con `_()` y `regspec/i18n.py` tiene las traducciones, incluidos los mensajes de validación. Un test verifica que todo texto de la app tenga traducción.
 
 ## Usuarios y memoria de configuración (Supabase)
@@ -228,19 +323,31 @@ espacio de trabajo (permisos por fila en la base):
 
 - `conciliacion`: cruces guardados (configuración, resumen, archivos, origen de la sugerencia y si se aceptó); el Excel
   va al bucket `resultados/<usuario>/`.
-- `memoria_conciliacion`: **memoria de configuración y aprendizaje por uso**. Cada cruce se recuerda asociado a la firma
-  de los archivos (sus columnas por grupo, no sus nombres). Cuando el usuario sube archivos con la misma estructura, la
-  app ofrece «Usar la configuración aprendida». Se registran `veces_usado`, `veces_corregido` (si el usuario la cambió)
-  y una `confianza` que sube con el uso sin cambios y baja con las correcciones.
+- `memoria_conciliacion`: **memoria de configuración**. Cada cruce se recuerda asociado a la firma de los archivos (sus
+  columnas por grupo, no sus nombres). Cuando el usuario sube archivos con la misma estructura, la app ofrece «Usar la
+  configuración aprendida». Se registran `veces_usado` (u) y `veces_corregido` (c), y la confianza se calcula con
+  corrección de Laplace: (u − c + 1) / (u + 2). Por debajo del 95 % la configuración se ofrece; por encima se aplica sola.
+  Es por usuario. Es un mecanismo **determinista** (conteo de usos y correcciones), no aprendizaje automático.
 - `especificacion`: formatos aprendidos por la IA, por espacio de trabajo (en la nube el disco no persiste).
 - `perfil.idioma`: la app abre en el idioma del usuario y recuerda el que elija.
 
 Sin esas claves, todo funciona en modo local (sin login) y la memoria se guarda en `cruces_guardados/memoria.json`.
 
+## Pendientes
+
+- E6 semilla 3000: completar la instrucción que falló por cupo (la caché reutiliza las otras 23).
+- E1 con `gpt-oss-20b` en m1 y m2, para tener los dos modelos en los cinco manuales; idealmente una segunda repetición con `--sin-cache`.
+- Ablaciones del compilador (`llm_bucle_sin_evidencia`, `llm_bucle_sin_ejecucion`) con los cinco manuales.
+- Caso real anonimizado para medir el tiempo frente al proceso manual.
+- Probar a mano en la app el botón de llave con IA y «Describir el cruce con texto».
+
 ## Limitaciones y líneas futuras
 
+- Resultados del compilador con n = 1 y modelos mezclados.
+- Cuando el bucle no progresa, reintentar con otra temperatura u otro modelo.
+- Textos extraídos de PDF con maquetación compleja (m4).
+- Instrucciones en texto que describen el filtro por su significado y no por la columna.
 - Estructuras XML anidadas y registros jerárquicos (padre/hijo).
 - Campos con signo y formatos numéricos con separador explícito en ancho fijo.
-- Manuales largos: extracción por secciones y fusión de especificaciones parciales.
 - Transmisión a los organismos (API o web service) y catálogo amplio de jurisdicciones.
-- Detección de inconsistencias del propio manual (el verificador ya las señala; falta el caso de estudio).
+- Detección de inconsistencias del propio manual: el verificador ya las señala (m5); falta el caso de estudio.

@@ -211,7 +211,8 @@ with st.sidebar:
 st.markdown(ui_estilo.encabezado(
     _("Conciliación de archivos heterogéneos"),
     _("Subí los archivos que tenés que cruzar, revisá cómo se comparan y descargá el resultado. "
-      "Si un formato es nuevo, el sistema lo aprende de su manual técnico.")), unsafe_allow_html=True)
+      "Si un formato es nuevo, el sistema lo aprende de su manual técnico."),
+    _("Prototipo · Trabajo Fin de Máster")), unsafe_allow_html=True)
 BIBLIO = RAIZ / "especificaciones"
 
 
@@ -302,6 +303,13 @@ tc, tm, t1, t2, t3, t4, *_t_met = st.tabs([_(x).split(" ", 1)[-1] for x in _pest
 
 # ---------------------------------------------------------------- 1. compilar
 with t1:
+    st.markdown(ui_estilo.etiquetas(
+        ("ia", _("Asistido por IA"), _("Un modelo de lenguaje propone la especificación a partir del manual.")),
+        ("det", _("Determinístico"), _("Un verificador con código la revisa y le devuelve los errores para que los corrija."))),
+        unsafe_allow_html=True)
+    st.markdown(ui_estilo.lema(_("La IA propone, el verificador decide."),
+                               _("El código comprueba estructura, posiciones, reglas y evidencia en el manual, y prueba la especificación generando y releyendo un archivo.")),
+                unsafe_allow_html=True)
     ejemplos = {p.stem: p for p in sorted([*(RAIZ / "manuales").glob("*.md"), *(RAIZ / "manuales").glob("*.txt")])}
     c1, c2 = st.columns([1, 1])
     with c1:
@@ -364,6 +372,9 @@ with t1:
 
 # ---------------------------------------------------------------- 2. especificación
 with t2:
+    st.markdown(ui_estilo.etiquetas(
+        ("det", _("Determinístico"), _("Registros, campos y reglas de la especificación activa, con el resultado de su verificación."))),
+        unsafe_allow_html=True)
     spec: Especificacion | None = ss.spec
     if spec is None:
         st.info(_("Primero compilá un manual o cargá una especificación."))
@@ -394,6 +405,9 @@ with t2:
 
 # ---------------------------------------------------------------- 3. validar
 with t3:
+    st.markdown(ui_estilo.etiquetas(
+        ("det", _("Determinístico"), _("El archivo se valida con código contra la especificación; no se usa IA."))),
+        unsafe_allow_html=True)
     from regspec.cruce import _decodificar, biblioteca_de_especificaciones as _biblio, detectar_especificacion as _detectar
 
     @st.cache_resource(show_spinner=False, max_entries=8)
@@ -425,6 +439,9 @@ with t3:
 
 # ---------------------------------------------------------------- 4. generar
 with t4:
+    st.markdown(ui_estilo.etiquetas(
+        ("det", _("Determinístico"), _("El archivo se arma con código a partir de la especificación y se controla antes de descargarlo."))),
+        unsafe_allow_html=True)
     spec = ss.spec
     if spec is None:
         st.info(_("Primero compilá un manual o cargá una especificación."))
@@ -523,6 +540,10 @@ with tc:
     if ss.spec is not None:
         biblioteca["(compilada en esta sesión)"] = ss.spec
 
+    st.markdown(ui_estilo.etiquetas(
+        ("det", _("Determinístico"), _("El cruce, los importes y las diferencias los calcula el código.")),
+        ("ia", _("Asistido por IA"), _("Solo si hace falta: propone la llave o la configuración y se valida antes de usarla."))),
+        unsafe_allow_html=True)
     paso_ph = st.empty()  # casillas de los pasos: se completan al final, cuando se sabe en qué paso está
     guardados = almacen.listar()
     if guardados:

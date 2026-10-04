@@ -1,3 +1,33 @@
 [server]
 # el padrón mensual puede pesar varios cientos de MB
 maxUploadSize = 1024
+
+[client]
+# sin el menú de desarrollo ni el botón «Deploy»
+toolbarMode = "minimal"
+
+[theme]
+# «papel continuo de auditoría»: papel, banda verde, tinta grafito, lápiz azul y lápiz rojo
+base = "light"
+primaryColor = "#2747A0"
+backgroundColor = "#FDFDFB"
+secondaryBackgroundColor = "#EEF5EF"
+textColor = "#1C2A33"
+borderColor = "#CFD8D3"
+redColor = "#B42318"
+greenColor = "#2E7D4F"
+blueColor = "#2747A0"
+linkColor = "#2747A0"
+font = "Archivo:https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,300..800&display=swap, sans-serif"
+headingFont = "Archivo:https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,300..800&display=swap, sans-serif"
+codeFont = "IBM Plex Mono:https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap, monospace"
+headingFontWeights = [800, 700, 650, 600, 600, 600]
+baseRadius = "small"
+buttonRadius = "small"
+dataframeHeaderBackgroundColor = "#EEF5EF"
+showSidebarBorder = true
+chartCategoricalColors = ["#2747A0", "#B42318", "#7A8B83", "#2E7D4F", "#C9A227"]
+
+[theme.sidebar]
+backgroundColor = "#F6F8F6"
+secondaryBackgroundColor = "#EEF5EF"

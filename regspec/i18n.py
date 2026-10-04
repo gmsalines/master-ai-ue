@@ -15,6 +15,18 @@ PT: dict[str, str] = {
     "No se pudo actualizar el modelo de llave": "Não foi possível atualizar o modelo de chave",
     # encabezado y barra lateral
     "Conciliación de archivos regulatorios": "Conciliação de arquivos regulatórios",
+    "Conciliación de archivos heterogéneos": "Conciliação de arquivos heterogêneos",
+    "Entrá con tu mail para ver tus cruces y configuraciones.": "Entre com seu e-mail para ver seus cruzamentos e configurações.",
+    "Subí los archivos que tenés que cruzar, revisá cómo se comparan y descargá el resultado. Si un formato es nuevo, el sistema lo aprende de su manual técnico.":
+        "Envie os arquivos que você precisa cruzar, revise como são comparados e baixe o resultado. Se um formato é novo, o sistema o aprende a partir do manual técnico.",
+    "Prototipo del Trabajo Fin de Máster. El cruce siempre lo hace el código; la IA solo propone y todo se valida.":
+        "Protótipo do Trabalho de Conclusão de Mestrado. O cruzamento é sempre feito pelo código; a IA apenas propõe e tudo é validado.",
+    "Configuración avanzada (IA)": "Configuração avançada (IA)",
+    "Coinciden en todos los grupos": "Coincidem em todos os grupos",
+    "En todos, con diferencias de importe": "Em todos, com diferenças de valor",
+    "{0} llaves en total": "{0} chaves no total",
+    "Archivos": "Arquivos",
+    "Comparación": "Comparação",
     "Subí tus archivos (CSV, Excel, TXT posicional o XML) y el sistema los cruza. Si un formato es nuevo, lo aprende de su manual técnico: un LLM lo convierte en una especificación formal y un verificador la comprueba.":
         "Envie seus arquivos (CSV, Excel, TXT posicional ou XML) e o sistema os cruza. Se um formato é novo, ele o aprende a partir do manual técnico: um LLM o converte em uma especificação formal e um verificador a confere.",
     "Idioma": "Idioma",
@@ -277,8 +289,8 @@ PT: dict[str, str] = {
         "Uso real da ferramenta para o capítulo de resultados: cada «Cruzar» deixa um registro com a origem da configuração, se foi aceita ou corrigida, o tempo de preparação e o uso de IA.",
     "🔎 **El código no encontró una llave clara** que vincule todos los archivos.":
         "🔎 **O código não encontrou uma chave clara** que vincule todos os arquivos.",
-    "🤖 La IA propuso la llave y la validación la confirmó (coincidencia de valores ≥ 30 % en todos los archivos). Revisala abajo. Motivo: {0}":
-        "🤖 A IA propôs a chave e a validação a confirmou (coincidência de valores ≥ 30 % em todos os arquivos). Revise-a abaixo. Motivo: {0}",
+    "🤖 La IA propuso la llave y la validación la confirmó (coincide entre archivos e identifica registros: solidez ≥ 50 %). Revisala abajo. Motivo: {0}":
+        "🤖 A IA propôs a chave e a validação a confirmou (coincide entre os arquivos e identifica registros: solidez ≥ 50 %). Revise-a abaixo. Motivo: {0}",
     "🤖 La propuesta de la IA no pasó la validación en todos los archivos; donde no la pasó se mantiene la sugerencia del código. Motivo: {0}":
         "🤖 A proposta da IA não passou na validação em todos os arquivos; onde não passou, mantém-se a sugestão do código. Motivo: {0}",
     "🤖 Pedir la llave a la IA": "🤖 Pedir a chave à IA",

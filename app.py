@@ -51,7 +51,7 @@ from regspec.validador import validar
 from regspec.verificador import verificar
 
 RAIZ = Path(__file__).parent
-st.set_page_config(page_title="Compilador de especificaciones", page_icon="🧩", layout="wide")
+st.set_page_config(page_title="Conciliación de archivos heterogéneos", page_icon="🧾", layout="wide")
 ss = st.session_state
 
 from regspec.i18n import IDIOMAS, traducir, traducir_df  # noqa: E402
@@ -79,6 +79,11 @@ def _df(df, **kw):
     return traducir_df(df, ss.idioma, **kw)
 
 
+import ui_estilo  # noqa: E402
+
+st.markdown(ui_estilo.CSS, unsafe_allow_html=True)
+
+
 ss.setdefault("spec", None)
 ss.setdefault("manual", "")
 ss.setdefault("iteraciones", [])
@@ -98,7 +103,7 @@ if SB_URL and SB_KEY and not ss.get("sesion"):
     _c1, _c2, _c3 = st.columns([1, 1.2, 1])
     with _c2:
         st.selectbox("🌐 Idioma", list(IDIOMAS), format_func=IDIOMAS.get, key="idioma")
-        st.title(_("Conciliación de archivos regulatorios"))
+        st.markdown(ui_estilo.encabezado(_("Conciliación de archivos heterogéneos"), _("Entrá con tu mail para ver tus cruces y configuraciones.")), unsafe_allow_html=True)
         with st.form("login"):
             st.subheader(_("Entrar"))
             email = st.text_input(_("Mail"))
@@ -154,56 +159,59 @@ with st.sidebar:
     # El resto usa el modelo por defecto con la clave de los Secrets, que nunca se muestra.
     _admins = {m.strip().lower() for m in str(_secreto("ADMINS") or "").replace(";", ",").split(",") if m.strip()}
     ver_config = not ss.get("sesion") or ss.sesion["email"].lower() in _admins
-    if ver_config:
-        st.header(_("Modelo"))
-        opcion = st.selectbox(_("Proveedor"), ["groq", "gemini", "openai", "openrouter", "ollama", "anthropic", "sin IA (línea base)"],
-                              format_func=_)
-    else:
-        opcion = "groq"
-    if opcion == "sin IA (línea base)":
-        proveedor = None
-    else:
-        defecto = PRESETS.get(opcion, (None, None, "claude-haiku-4-5-20251001"))[2]
-        if not ver_config:
-            modelo = "openai/gpt-oss-120b"
-        elif opcion == "groq":
-            modelo = st.selectbox(_("Modelo"), ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "(otro)"], format_func=_,
-                                  help=_("Cada modelo tiene su propio cupo diario en el plan gratuito."))
-            if modelo == "(otro)":
-                modelo = st.text_input(_("Nombre del modelo"), "")
+    st.caption(_("Prototipo del Trabajo Fin de Máster. El cruce siempre lo hace el código; la IA solo propone y todo se valida."))
+    _panel = st.expander(_("Configuración avanzada (IA)")) if ver_config else st.container()
+    with _panel:
+        if ver_config:
+            opcion = st.selectbox(_("Proveedor"), ["groq", "gemini", "openai", "openrouter", "ollama", "anthropic", "sin IA (línea base)"],
+                                  format_func=_)
         else:
-            modelo = st.text_input(_("Modelo"), defecto)
-        env = PRESETS.get(opcion, (None, "ANTHROPIC_API_KEY", None))[1] if opcion != "anthropic" else "ANTHROPIC_API_KEY"
-        clave_config = os.environ.get(env or "", "") or _secreto(env or "")
-        clave = None
-        if env:
-            # la clave configurada nunca se muestra en pantalla: el campo queda vacío y solo reemplaza si se escribe otra
-            escrita = st.text_input(_("API key"), value="", type="password",
-                                    placeholder=_("(usa la clave configurada)") if clave_config else "",
-                                    help=_("No se guarda; solo se usa en esta sesión.")) if ver_config else ""
-            clave = escrita or clave_config
-        if opcion == "anthropic":
-            proveedor = Anthropic(modelo=modelo, api_key=clave)
+            opcion = "groq"
+        if opcion == "sin IA (línea base)":
+            proveedor = None
         else:
-            extra = {"reasoning_effort": "low"} if ("gpt-oss" in modelo and opcion == "groq") else {}
-            proveedor = OpenAICompatible(modelo=modelo, base_url=PRESETS[opcion][0], api_key=clave, nombre=opcion, extra=extra)
-    if ver_config:
-        max_it = st.slider(_("Máximo de iteraciones de autocorrección"), 1, 6, 4)
-        usar_cache = st.checkbox(_("Reutilizar respuestas guardadas (no gasta tokens al repetir)"), value=True)
-        modo = st.radio(_("Modo de extracción"), ["secciones", "completo"], format_func=_,
-                        help=_("Secciones: una llamada por parte (entra en los planes gratuitos). Completo: una sola respuesta."))
-        st.divider()
-        st.caption(_("Cargar una especificación existente"))
-        subida = st.file_uploader(_("spec.json"), type=["json"], key="spec_json")
-        if subida is not None and st.button(_("Usar esta especificación")):
-            d = json.loads(subida.read())
-            ss.spec = Especificacion.model_validate(d.get("spec", d))
-    else:
-        max_it, usar_cache, modo = 4, True, "secciones"
+            defecto = PRESETS.get(opcion, (None, None, "claude-haiku-4-5-20251001"))[2]
+            if not ver_config:
+                modelo = "openai/gpt-oss-120b"
+            elif opcion == "groq":
+                modelo = st.selectbox(_("Modelo"), ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "(otro)"], format_func=_,
+                                      help=_("Cada modelo tiene su propio cupo diario en el plan gratuito."))
+                if modelo == "(otro)":
+                    modelo = st.text_input(_("Nombre del modelo"), "")
+            else:
+                modelo = st.text_input(_("Modelo"), defecto)
+            env = PRESETS.get(opcion, (None, "ANTHROPIC_API_KEY", None))[1] if opcion != "anthropic" else "ANTHROPIC_API_KEY"
+            clave_config = os.environ.get(env or "", "") or _secreto(env or "")
+            clave = None
+            if env:
+                # la clave configurada nunca se muestra en pantalla: el campo queda vacío y solo reemplaza si se escribe otra
+                escrita = st.text_input(_("API key"), value="", type="password",
+                                        placeholder=_("(usa la clave configurada)") if clave_config else "",
+                                        help=_("No se guarda; solo se usa en esta sesión.")) if ver_config else ""
+                clave = escrita or clave_config
+            if opcion == "anthropic":
+                proveedor = Anthropic(modelo=modelo, api_key=clave)
+            else:
+                extra = {"reasoning_effort": "low"} if ("gpt-oss" in modelo and opcion == "groq") else {}
+                proveedor = OpenAICompatible(modelo=modelo, base_url=PRESETS[opcion][0], api_key=clave, nombre=opcion, extra=extra)
+        if ver_config:
+            max_it = st.slider(_("Máximo de iteraciones de autocorrección"), 1, 6, 4)
+            usar_cache = st.checkbox(_("Reutilizar respuestas guardadas (no gasta tokens al repetir)"), value=True)
+            modo = st.radio(_("Modo de extracción"), ["secciones", "completo"], format_func=_,
+                            help=_("Secciones: una llamada por parte (entra en los planes gratuitos). Completo: una sola respuesta."))
+            st.divider()
+            st.caption(_("Cargar una especificación existente"))
+            subida = st.file_uploader(_("spec.json"), type=["json"], key="spec_json")
+            if subida is not None and st.button(_("Usar esta especificación")):
+                d = json.loads(subida.read())
+                ss.spec = Especificacion.model_validate(d.get("spec", d))
+        else:
+            max_it, usar_cache, modo = 4, True, "secciones"
 
-st.title(_("Conciliación de archivos regulatorios"))
-st.caption(_("Subí tus archivos (CSV, Excel, TXT posicional o XML) y el sistema los cruza. Si un formato es nuevo, "
-           "lo aprende de su manual técnico: un LLM lo convierte en una especificación formal y un verificador la comprueba."))
+st.markdown(ui_estilo.encabezado(
+    _("Conciliación de archivos heterogéneos"),
+    _("Subí los archivos que tenés que cruzar, revisá cómo se comparan y descargá el resultado. "
+      "Si un formato es nuevo, el sistema lo aprende de su manual técnico.")), unsafe_allow_html=True)
 BIBLIO = RAIZ / "especificaciones"
 
 
@@ -290,7 +298,7 @@ ss.setdefault("cfg_ver", 0)
 
 _pestanas = ["🔀 Cruzar archivos", "🗂 Mis cruces", "📘 Aprender un formato (manual)", "📋 Especificación",
              "✅ Validar archivo", "🧾 Generar archivo"] + (["📊 Métricas"] if ver_config else [])
-tc, tm, t1, t2, t3, t4, *_t_met = st.tabs([_(x) for x in _pestanas])
+tc, tm, t1, t2, t3, t4, *_t_met = st.tabs([_(x).split(" ", 1)[-1] for x in _pestanas])  # sin el emoji
 
 # ---------------------------------------------------------------- 1. compilar
 with t1:
@@ -515,6 +523,7 @@ with tc:
     if ss.spec is not None:
         biblioteca["(compilada en esta sesión)"] = ss.spec
 
+    paso_ph = st.empty()  # casillas de los pasos: se completan al final, cuando se sabe en qué paso está
     guardados = almacen.listar()
     if guardados:
         g1c, g2c = st.columns([4, 1])
@@ -706,7 +715,7 @@ with tc:
                         st.rerun()
         if ia_res is not None:
             if ia_res["validada"]:
-                st.success(_("🤖 La IA propuso la llave y la validación la confirmó (coincidencia de valores ≥ 30 % en todos los archivos). "
+                st.success(_("🤖 La IA propuso la llave y la validación la confirmó (coincide entre archivos e identifica registros: solidez ≥ 50 %). "
                              "Revisala abajo. Motivo: {0}").format(ia_res["motivo"]))
             else:
                 st.warning(_("🤖 La propuesta de la IA no pasó la validación en todos los archivos; donde no la pasó se mantiene "
@@ -1003,17 +1012,17 @@ with tc:
         r = ss.get("res_grupos")
         if r is not None:
             nombres = [n for n, *_ in listos]
-            mets = st.columns(2 + len(nombres))
-            mets[0].metric(_("En todos los grupos"), r.resumen["en todos los grupos"])
-            mets[1].metric(_("…con diferencias"), r.resumen["en todos, con diferencias"])
-            for j, n in enumerate(nombres):
-                mets[2 + j].metric(_('Solo en {0}').format(n), r.resumen.get(f"solo en {n}", 0))
+            st.markdown(ui_estilo.cuadre(
+                int(r.resumen.get("en todos, iguales", 0)), int(r.resumen["en todos, con diferencias"]),
+                [(n, int(r.resumen.get(f"solo en {n}", 0))) for n in nombres], int(r.resumen["llaves en el universo"]),
+                {"ok": _("Coinciden en todos los grupos"), "dif": _("En todos, con diferencias de importe"),
+                 "solo": _("Solo en {0}"), "total": _("{0} llaves en total")}), unsafe_allow_html=True)
             with st.expander(_("Estadísticas por grupo (filas, llaves, duplicados, exclusiones, lookups)")):
                 est = pd.DataFrame({g: {k: str(v) for k, v in s.items()} for g, s in r.estadisticas.items()}).fillna("–")
                 st.dataframe(_df(est), width="stretch")
             if len(r.diferencias):
                 st.markdown(_("**Diferencias de importe**"))
-                st.dataframe(_df(r.diferencias), hide_index=True, width="stretch")
+                st.dataframe(ui_estilo.tabla_continua(_df(r.diferencias)), hide_index=True, width="stretch")
             estados = ["(todos)"] + sorted(r.matriz["estado"].unique())
             ver = st.selectbox(_("Ver llaves"), estados, key="ver_estado", format_func=_)
             m = r.matriz if ver == "(todos)" else r.matriz[r.matriz["estado"] == ver]
@@ -1021,7 +1030,10 @@ with tc:
                 st.caption(_("Se muestran las primeras {0} de {1} llaves; el Excel tiene el detalle.").format(
                     f"{MOSTRAR:,}".replace(",", "."), f"{len(m):,}".replace(",", ".")))
             vista = m.head(MOSTRAR).map(lambda v: "✔" if v is True else ("" if v is False else v)).astype(str).replace({"None": "", "nan": ""})
-            st.dataframe(_df(vista), hide_index=True, width="stretch")
+            marcas = ["dif" if d else ("ok" if t else "solo")
+                      for t, d in zip(m.head(MOSTRAR)["en todos"], m.head(MOSTRAR)["con diferencias"])]
+            st.dataframe(ui_estilo.tabla_continua(_df(vista), marcas, list(vista.columns).index("estado")),
+                         hide_index=True, width="stretch")
             excel = ss.get("res_excel")
             if excel is None:
                 st.caption(_("El resultado es grande: el Excel se arma a pedido (puede tardar un minuto) y cada hoja se limita a 200.000 filas."))
@@ -1051,6 +1063,8 @@ with tc:
     elif any(g is None for g in grupos_ui):
         st.caption(_("Para probar: Grupo 1 = ejemplos/grupos/g1_retenciones_sistema.csv + g1_padron_referencia.csv "
                    "(modo base + referencia) · Grupo 2 = ejemplos/grupos/g2_reporte_agente.csv"))
+    _paso = 3 if ss.get("res_grupos") is not None else (2 if len(listos) >= 2 and len(listos) == len(grupos_ui) else 1)
+    paso_ph.markdown(ui_estilo.casillas(_paso, [_("Archivos"), _("Comparación"), _("Resultado")]), unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------- mis cruces

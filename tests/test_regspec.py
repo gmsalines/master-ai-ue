@@ -683,6 +683,23 @@ def test_llave_ia_descarta_columnas_inventadas():
     assert abs(ok["solape"] - 2 / 3) < 1e-9 and ok["inventadas"] == 0
 
 
+def test_llaves_ia_varias_tablas_valida_con_solidez():
+    import pandas as pd
+    from regspec.grupos import llaves_claras, sugerir_llaves_ia
+    a = pd.DataFrame({"Nro": [f"F{i}" for i in range(20)], "Cliente": ["C1"] * 20, "Importe": range(20)})
+    b = pd.DataFrame({"Comprobante": [f"F{i}" for i in range(20)], "Cli": ["C1"] * 20, "Monto": range(20)})
+    ok = sugerir_llaves_ia([a, b], _ProveedorFijo('{"llaves": [["Nro"], ["Comprobante"]], "normalizacion": "exacta"}'))
+    assert ok["validada"] and ok["llaves"][1][0] == ["Comprobante"] and ok["llaves"][1][2] == 1.0
+    # un atributo compartido coincide al 100 % pero no identifica registros: no pasa la validación
+    mal = sugerir_llaves_ia([a, b], _ProveedorFijo('{"llaves": [["Cliente"], ["Cli"]]}'))
+    assert not mal["validada"] and mal["llaves"][1] is None
+    # columnas inventadas: se descartan
+    inv = sugerir_llaves_ia([a, b], _ProveedorFijo('{"llaves": [["Numero"], ["Comprobante"]]}'))
+    assert not inv["validada"]
+    assert llaves_claras([("Nro", "exacta", 1.0), ("Comprobante", "exacta", 0.9)])
+    assert not llaves_claras([("Nro", "exacta", 1.0), ("Cli", "exacta", 0.1)]) and not llaves_claras([None, None])
+
+
 def test_llave_ia_sin_muestras_envia_solo_nombres():
     import pandas as pd
     from regspec.cruce import consultar_llave_ia

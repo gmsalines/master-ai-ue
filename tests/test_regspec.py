@@ -862,3 +862,43 @@ def test_modelo_de_llave_con_tablas_grandes_usa_la_heuristica(monkeypatch):
     monkeypatch.setattr(llave_ml, "MAX_FILAS_MODELO", 10)
     assert llave_ml.sugerir_llaves_modelo([c.a, c.b], llave_ml.modelo_base()) == sugerir_llaves([c.a, c.b])
     assert llave_ml.ejemplos_de_cruce([c.a, c.b], [c.llave_a, c.llave_b], "exacta") == {"X": [], "y": []}
+
+
+def test_leer_csv_detecta_separador_y_codificacion():
+    """El CSV se lee con el lector en C (memoria acotada); el separador se detecta sobre una muestra. (El lector en
+    Python con sep=None, que se usaba antes, confundía el separador «|» con la letra «o» en este mismo ejemplo.)"""
+    import io as _io
+
+    import pandas as pd
+
+    from regspec.cruce import leer_csv, tabla_desde_archivo
+    filas = [["cuenta", "documento", "crédito", "nombre"], ["001", "123", "998,16", "João"], ["002", "", "1.000,00", "Ana; B"]]
+    for sep in [",", ";", "|", "\t"]:
+        for cod, bom in [("utf-8", b""), ("utf-8", b"\xef\xbb\xbf"), ("latin-1", b"")]:
+            buf = _io.StringIO()
+            pd.DataFrame(filas[1:], columns=filas[0]).to_csv(buf, sep=sep, index=False)
+            contenido = bom + buf.getvalue().encode(cod)
+            df = leer_csv(contenido)
+            assert list(df.columns) == filas[0] and df.loc[0, "crédito"] == "998,16" and pd.isna(df.loc[1, "documento"])
+            assert df.loc[1, "nombre"] == "Ana; B" and df.loc[0, "nombre"] == "João"
+    una_columna = leer_csv("valor\n1\n2\n".encode())
+    assert list(una_columna.columns) == ["valor"] and len(una_columna) == 2
+    assert tabla_desde_archivo("a;b\n1;2\n".encode(), "x.csv").columns.tolist() == ["a", "b"]
+
+
+def test_excel_de_grupos_por_filas_con_recorte():
+    """El Excel del resultado se escribe fila a fila (memoria acotada): mismas hojas y orden, recorte informado."""
+    import io as _io
+
+    import pandas as pd
+
+    from regspec.grupos import ArchivoGrupo, Grupo, cruzar_grupos
+    a = pd.DataFrame({"id": [str(i) for i in range(30)], "monto": ["1,5"] * 30})
+    b = pd.DataFrame({"id": [str(i) for i in range(5, 40)], "monto": ["1,5"] * 34 + [None]})
+    r = cruzar_grupos([Grupo("A", [ArchivoGrupo("a", a, ["id"])]), Grupo("B", [ArchivoGrupo("b", b, ["id"])])],
+                      [("monto", "monto")])
+    h = pd.read_excel(_io.BytesIO(r.a_excel(max_filas=10)), sheet_name=None, dtype=str)
+    assert list(h) == ["Resumen", "Grupos", "Cruce por llave", "Diferencias", "Detalle A", "Detalle B"]
+    assert len(h["Cruce por llave"]) == 10 and len(h["Detalle B"]) == 10
+    assert h["Resumen"]["valor"].str.contains("primeras 10 de 40 filas").any()
+    assert h["Resumen"]["indicador"].tolist()[0] == "llaves en el universo"

@@ -453,7 +453,8 @@ with t4:
         csv = st.file_uploader(_("CSV con los datos"), type=["csv"], key="csv")
         tr = spec.tipo(cod)
         if csv is not None and tr is not None:
-            df = pd.read_csv(csv, dtype=str, sep=None, engine="python")
+            from regspec.cruce import leer_csv
+            df = leer_csv(csv.getvalue())
             st.dataframe(df.head(), hide_index=True)
             campos = [c.nombre for c in tr.campos if c.tipo != "constante"]
             mapeo = {}

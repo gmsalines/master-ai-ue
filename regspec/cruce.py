@@ -40,6 +40,36 @@ def _decodificar(contenido: bytes, codificacion: str = "utf-8") -> str:
     return contenido.decode("latin-1")
 
 
+SEPARADORES_CSV = ",;|\t"
+
+
+def separador_csv(contenido: bytes, n_lineas: int = 20) -> str:
+    """Separador de un CSV, detectado sobre las primeras líneas (no hace falta recorrer el archivo entero).
+    Si no se puede decidir (por ejemplo, una sola columna), coma."""
+    import csv
+    muestra = "\n".join(_decodificar(contenido[:65536]).splitlines()[:n_lineas])
+    try:
+        return csv.Sniffer().sniff(muestra, delimiters=SEPARADORES_CSV).delimiter
+    except csv.Error:
+        return ","
+
+
+def leer_csv(contenido: bytes) -> pd.DataFrame:
+    """Lee un CSV con el lector en C de pandas, directo desde los bytes.
+
+    Antes se decodificaba el archivo entero a texto y se leía con el lector en Python de pandas (que detecta
+    el separador solo): con un millón de filas eso se quedaba sin memoria. Ahora el separador se detecta sobre
+    una muestra y el lector en C decodifica sobre la marcha; la codificación es UTF-8 y, si falla, latin-1.
+    """
+    sep = separador_csv(contenido)
+    for cod in ("utf-8-sig", "latin-1"):
+        try:
+            return pd.read_csv(io.BytesIO(contenido), dtype=str, sep=sep, engine="c", encoding=cod)
+        except UnicodeDecodeError:
+            continue
+    raise ValueError("no se pudo decodificar el CSV")  # latin-1 nunca falla: no se llega acá
+
+
 def _fila_encabezado(crudo: pd.DataFrame, max_filas: int = 15) -> int:
     """Primera fila que parece encabezado: la que tiene más celdas de texto no vacías y distintas."""
     mejor, puntaje = 0, -1.0
@@ -97,8 +127,7 @@ def tabla_desde_archivo(contenido: bytes, nombre: str, spec: Optional[Especifica
     if ext in ("xlsx", "xls", "xlsm"):
         return leer_excel(contenido, hoja)
     if ext == "csv":
-        texto = _decodificar(contenido)
-        return pd.read_csv(io.StringIO(texto), dtype=str, sep=None, engine="python")
+        return leer_csv(contenido)
     if spec is None:
         raise ValueError(f"para leer '{nombre}' hace falta la especificación del formato")
     if spec.formato == "delimitado" and len(spec.tipos_registro) == 1:

@@ -177,7 +177,7 @@ class ArchivoGrupo:
     traer: list[str] = field(default_factory=list)  # solo referencias en modo base_referencia
 
     def preparado(self) -> tuple[pd.DataFrame, int]:
-        df = self.df.copy()
+        df = self.df.copy(deep=False)  # sin duplicar los datos: solo se agregan columnas o se filtran filas
         excluidas = 0
         for f in self.filtros:
             if f.columna in df.columns:
@@ -215,13 +215,18 @@ class Grupo:
                 stats[f"encontradas en {arch.nombre}"] = f"{encontrados} de {total_base} ({encontrados / max(1, total_base):.1%})"
                 base = base.drop(columns=f"_en_{arch.nombre}")
             detalle = base
+        elif len(prep) == 1:  # un solo archivo: sin concatenar (con un millón de filas, una copia menos en memoria)
+            detalle = prep[0][0]
+            detalle.index = pd.RangeIndex(len(detalle))  # como pd.concat(..., ignore_index=True)
         else:
             detalle = pd.concat([p for p, _ in prep], ignore_index=True)
-        vacias = int((detalle["_llave"].str.replace("|", "", regex=False) == "").sum())
+        es_vacia = detalle["_llave"].str.replace("|", "", regex=False) == ""
+        vacias = int(es_vacia.sum())
         stats.update({"filas": len(detalle), "llaves únicas": detalle["_llave"].nunique(),
                       "filas con llave repetida": int(detalle["_llave"].duplicated(keep=False).sum()),
                       "llaves vacías (se excluyen del cruce)": vacias})
-        detalle = detalle[detalle["_llave"].str.replace("|", "", regex=False) != ""]
+        if vacias:
+            detalle = detalle[~es_vacia.to_numpy()]
         return detalle, stats
 
     def por_llave(self, detalle: pd.DataFrame) -> pd.DataFrame:
@@ -246,31 +251,52 @@ class ResultadoGrupos:
 
     def a_excel(self, max_filas: int = 200_000) -> bytes:
         """Excel del resultado. Cada hoja se limita a `max_filas` (Excel admite ~1 millón y escribir más es muy lento);
-        si se recorta, se indica en la hoja Resumen."""
+        si se recorta, se indica en la hoja Resumen.
+
+        Se escribe fila a fila con un libro de solo escritura de openpyxl: con resultados de un millón de llaves,
+        armar el libro entero en memoria (como hace pandas.to_excel) se quedaba sin memoria."""
+        from openpyxl import Workbook
+
+        hojas = [("Cruce por llave", self.matriz), ("Diferencias", self.diferencias)] + \
+                [(f"Detalle {g}", d) for g, d in self.detalles.items()]
+        recortes = [{"indicador": f"hoja «{n}» recortada", "valor": f"primeras {max_filas} de {len(df)} filas"}
+                    for n, df in hojas if len(df) > max_filas]
+        resumen = pd.DataFrame([{"indicador": k, "valor": str(v)} for k, v in self.resumen.items()] + recortes)
+        grupos = pd.DataFrame([{"grupo": g, "indicador": k, "valor": str(v)}
+                               for g, st in self.estadisticas.items() for k, v in st.items()])
+
+        wb = Workbook(write_only=True)
+
+        def hoja(nombre: str, df: pd.DataFrame, tope: Optional[int] = max_filas) -> None:
+            ws = wb.create_sheet(nombre[:31])
+            ws.append([str(c) for c in df.columns])
+            for fila in (df if tope is None else df.head(tope)).itertuples(index=False, name=None):
+                ws.append([_valor_excel(v) for v in fila])
+
+        hoja("Resumen", resumen, None)
+        hoja("Grupos", grupos, None)
+        for n, df in hojas:
+            hoja(n, df)
         buf = io.BytesIO()
-        recortes = []
-
-        def hoja(df, nombre):
-            if len(df) > max_filas:
-                recortes.append({"indicador": f"hoja «{nombre}» recortada", "valor": f"primeras {max_filas} de {len(df)} filas"})
-                df = df.head(max_filas)
-            _excel_safe(df).to_excel(xw, sheet_name=nombre[:31], index=False)
-
-        with pd.ExcelWriter(buf, engine="openpyxl") as xw:
-            filas = [{"grupo": g, "indicador": k, "valor": str(v)} for g, st in self.estadisticas.items() for k, v in st.items()]
-            pd.DataFrame(filas).to_excel(xw, sheet_name="Grupos", index=False)
-            hoja(self.matriz, "Cruce por llave")
-            hoja(self.diferencias, "Diferencias")
-            for g, d in self.detalles.items():
-                hoja(d, f"Detalle {g}")
-            resumen = [{"indicador": k, "valor": str(v)} for k, v in self.resumen.items()] + recortes
-            pd.DataFrame(resumen).to_excel(xw, sheet_name="Resumen", index=False)
-            xw.book.move_sheet("Resumen", offset=-len(xw.book.sheetnames) + 1)
+        wb.save(buf)
         return buf.getvalue()
 
 
-def _excel_safe(df: pd.DataFrame) -> pd.DataFrame:
-    return df.map(lambda v: float(v) if isinstance(v, Decimal) else v)
+def _valor_excel(v):
+    """Valor de una celda: Decimal y tipos de numpy a tipos de Python; vacíos (NaN, None, NA) a celda vacía."""
+    if v is None or v is pd.NA or v is pd.NaT:
+        return None
+    if isinstance(v, Decimal):
+        return float(v)
+    if isinstance(v, (float, np.floating)):
+        return None if np.isnan(v) else float(v)
+    if isinstance(v, np.bool_):
+        return bool(v)
+    if isinstance(v, np.integer):
+        return int(v)
+    if isinstance(v, pd.Timestamp):
+        return v.to_pydatetime()
+    return v
 
 
 def cruzar_grupos(grupos: list[Grupo], comparar: list[tuple[str, ...]] = (), tolerancia: Decimal = Decimal("0.01")) -> ResultadoGrupos:

@@ -386,6 +386,10 @@ PT: dict[str, str] = {
     "✓ Controles entre columnas ({0})": "✓ Controles entre colunas ({0})", "➕ Agregar control": "➕ Adicionar controle",
     "Controles (filas que no coinciden)": "Controles (linhas que não coincidem)", "coincide": "coincide",
     "distinta": "diferente", "sin dato": "sem dado", "filas que no pasan los controles": "linhas que não passam nos controles",
+    "Cómo se agrupa por llave": "Como se agrupa por chave", "Sumar por llave (importes)": "Somar por chave (valores)",
+    "Valor único por llave (alícuotas, tasas, códigos: no se suman)": "Valor único por chave (alíquotas, taxas, códigos: não se somam)",
+    "Los importes se suman por llave. Una alícuota o una tasa no se suma: se compara su valor, y si una llave tiene varios valores distintos se marca como diferencia.":
+        "Os valores se somam por chave. Uma alíquota ou uma taxa não se soma: compara-se o seu valor, e se uma chave tem vários valores diferentes, marca-se como diferença.",
 }
 
 # mensajes variables del núcleo (validación y resúmenes del cruce)

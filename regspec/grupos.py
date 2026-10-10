@@ -517,6 +517,7 @@ class Grupo:
     modo: str = "concatenar"
     importes: list[str] = field(default_factory=list)  # columnas numéricas que se suman por llave
     controles: list["Control"] = field(default_factory=list)  # comparaciones entre dos columnas del grupo
+    unicos: list[str] = field(default_factory=list)  # columnas que no se suman por llave: se toma su valor único
 
     def construir(self, excluidas_out: Optional[list] = None, totales_out: Optional[list] = None) -> tuple[pd.DataFrame, dict]:
         """Devuelve el detalle del grupo (filas con _llave) y estadísticas. Las filas excluidas (con su motivo) y los
@@ -572,12 +573,19 @@ class Grupo:
 
     def por_llave(self, detalle: pd.DataFrame) -> pd.DataFrame:
         """Una fila por llave: suma de importes, cantidad de filas y primeros valores del resto."""
-        importes = [c for c in self.importes if c in detalle.columns]
-        otros = [c for c in detalle.columns if c not in importes and c != "_llave"]
+        unicos = [c for c in self.unicos if c in detalle.columns]
+        importes = [c for c in self.importes if c in detalle.columns and c not in unicos]
+        otros = [c for c in detalle.columns if c not in importes and c not in unicos and c != "_llave"]
         g = detalle.groupby("_llave", sort=False)
         out = g[otros].first() if otros else pd.DataFrame(index=g.size().index)
         for c in importes:  # vectorizado: millones de filas en segundos
             out[c] = serie_numerica(detalle[c]).fillna(0.0).groupby(detalle["_llave"], sort=False).sum().round(6)
+        for c in unicos:  # valor único (p. ej. una alícuota): si la llave tiene varios valores distintos, se marca
+            gn = serie_numerica(detalle[c]).groupby(detalle["_llave"], sort=False)
+            mn, mx = gn.min().round(6), gn.max().round(6)
+            out[c] = mn.where(mn == mx)
+            out[f"_varios {c}"] = np.where((mn != mx) & mn.notna(),
+                                           mn.map(formatear_numero) + " a " + mx.map(formatear_numero), "")
         out["_filas"] = g.size()
         return out
 
@@ -655,12 +663,23 @@ def _valor_excel(v):
     return v
 
 
-def cruzar_grupos(grupos: list[Grupo], comparar: list[tuple[str, ...]] = (), tolerancia: Decimal = Decimal("0.01")) -> ResultadoGrupos:
+FUNCIONES_COMPARACION = {"suma": "Sumar por llave (importes)",
+                         "unico": "Valor único por llave (alícuotas, tasas, códigos: no se suman)"}
+
+
+def cruzar_grupos(grupos: list[Grupo], comparar: list[tuple[str, ...]] = (), tolerancia: Decimal = Decimal("0.01"),
+                  funciones: Optional[list[str]] = None) -> ResultadoGrupos:
     """Cruza N grupos por la llave construida.
 
-    `comparar`: tuplas con una columna de importe por grupo (en el orden de `grupos`), p. ej.
-    [("monto_retenido", "Monto Retenido")]. Se comparan los importes sumados por llave.
+    `comparar`: tuplas con una columna por grupo (en el orden de `grupos`), p. ej. [("monto_retenido", "Monto Retenido")].
+    `funciones`: una por comparación. «suma» (por defecto) compara los importes sumados por llave; «unico» compara el
+    valor de la columna cuando es el mismo en todas las filas de la llave (alícuotas, tasas) y marca como diferencia
+    las llaves que tienen varios valores distintos.
     """
+    funciones = list(funciones or []) + ["suma"] * max(0, len(comparar) - len(funciones or []))
+    for g in grupos:
+        g.unicos = sorted({t[i] for t, fn in zip(comparar, funciones) if fn == "unico"
+                           for i, gg in enumerate(grupos) if gg is g and i < len(t)})
     detalles, estad, por = {}, {}, {}
     excl_todas, tot_todos = [], []
     for g in grupos:
@@ -669,7 +688,8 @@ def cruzar_grupos(grupos: list[Grupo], comparar: list[tuple[str, ...]] = (), tol
         excl_todas += [e.assign(grupo=g.nombre) for e in excl_g]
         tot_todos += [t.assign(grupo=g.nombre) for t in tot_g]
         detalles[g.nombre], estad[g.nombre] = det, st
-        g_imp = set(g.importes) | {t[i] for t in comparar for i, gg in enumerate(grupos) if gg is g and i < len(t)}
+        g_imp = set(g.importes) | {t[i] for t, fn in zip(comparar, funciones) if fn != "unico"
+                                   for i, gg in enumerate(grupos) if gg is g and i < len(t)}
         g.importes = [c for c in g_imp if c in det.columns]
         por[g.nombre] = g.por_llave(det)
     universo = pd.Index(pd.unique(np.concatenate([p.index.to_numpy(dtype=object) for p in por.values()]))).sort_values()
@@ -678,10 +698,13 @@ def cruzar_grupos(grupos: list[Grupo], comparar: list[tuple[str, ...]] = (), tol
     for g in grupos:
         m[f"en {g.nombre}"] = universo.isin(por[g.nombre].index)
         m[f"filas {g.nombre}"] = por[g.nombre]["_filas"].reindex(universo).fillna(0).astype(int)
-    for t in comparar:
+    varios: dict = {}
+    for t, fn in zip(comparar, funciones):
         for i, g in enumerate(grupos):
             if i < len(t) and t[i] in por[g.nombre].columns:
                 m[f"{g.nombre}.{t[i]}"] = por[g.nombre][t[i]].reindex(universo)
+                if fn == "unico" and f"_varios {t[i]}" in por[g.nombre].columns:
+                    varios[f"{g.nombre}.{t[i]}"] = por[g.nombre][f"_varios {t[i]}"].reindex(universo).fillna("").to_numpy()
     presencia = m[[f"en {g.nombre}" for g in grupos]]
     m["en todos"] = presencia.all(axis=1)
     # estado vectorizado: cada combinación de presencia es un código binario
@@ -709,6 +732,13 @@ def cruzar_grupos(grupos: list[Grupo], comparar: list[tuple[str, ...]] = (), tol
             texto = " vs ".join(f"{g}.{c}={formatear_numero(arr[k, j])}" for j, (g, c, _) in enumerate(cols)) + \
                 f" (dif. {formatear_numero(dif[k])})"
             textos.setdefault(m.index[k], []).append(texto)
+        hay_varios = [varios[c] for _, _, c in cols if c in varios]
+        if hay_varios:  # valor único: llaves con varios valores distintos en algún grupo
+            alguno = np.any(np.vstack([v != "" for v in hay_varios]), axis=0)
+            for k in np.flatnonzero(en_todos & alguno):
+                partes = [f"{g}.{c}=" + (f"varios valores ({varios[col][k]})" if col in varios and varios[col][k]
+                                         else formatear_numero(arr[k, j])) for j, (g, c, col) in enumerate(cols)]
+                textos.setdefault(m.index[k], []).append(" vs ".join(partes))
     difs = [{"llave": k, "diferencias": "; ".join(v)} for k, v in sorted(textos.items())]
     m["con diferencias"] = m.index.isin(list(textos))
     matriz = m.reset_index()

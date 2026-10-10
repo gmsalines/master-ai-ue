@@ -654,7 +654,8 @@ with tc:
                                 ArchivoGrupo, Filtro, Grupo, cruzar_grupos, transformar)
 
     from regspec.grupos import (ACOMPANAN, AGREGACIONES, COLUMNAS_AUXILIARES, COMPARADORES, COMPARADORES_TEXTO,
-                                CONDICIONES, HOJAS_EXCEL, OPERACIONES, SALIDAS, Agregacion, Control, Termino, Umbral)
+                                CONDICIONES, FUNCIONES_COMPARACION, HOJAS_EXCEL, OPERACIONES, SALIDAS, Agregacion, Control,
+                                Termino, Umbral)
 
     def editor_controles(cols: list, previos: list, k: str) -> list:
         """«Controles entre columnas» de un grupo: compara dos columnas de cada fila (p. ej. alícuota informada contra la
@@ -1102,7 +1103,7 @@ with tc:
         st.subheader(_("2 · ¿Qué comparo en cada llave?"))
         st.caption(_("Elegí la columna de importe de cada grupo; se suman por llave y se comparan con la tolerancia."))
         n_cmp = st.number_input(_("Cantidad de importes a comparar"), 0, 5, min(5, len(cfg.comparaciones)) if cfg is not None else 1, key=f"ncmp_{V}")
-        comparaciones = []
+        comparaciones, funciones_cmp = [], []
         for k in range(int(n_cmp)):
             cc = st.columns(len(listos))
             fila = []
@@ -1120,6 +1121,13 @@ with tc:
                                                                           fila[0].lower().replace("_", " ")).ratio())
                 fila.append(cc[j].selectbox(f"{nom}", cols_g, index=cols_g.index(elegido), key=f"cmp_{k}_{j}_{V}"))
             comparaciones.append(tuple(fila))
+            fn_prev = (cfg.funciones_comparacion[k] if cfg is not None and k < len(cfg.funciones_comparacion) else
+                       "unico" if re.search(r"al[ií]cuota|tarifa|tasa|rate|porcentaje|%", " ".join(fila), re.I) else "suma")
+            funciones_cmp.append(st.radio(_("Cómo se agrupa por llave"), list(FUNCIONES_COMPARACION), horizontal=True,
+                                          index=list(FUNCIONES_COMPARACION).index(fn_prev) if fn_prev in FUNCIONES_COMPARACION else 0,
+                                          format_func=lambda x: _(FUNCIONES_COMPARACION[x]), key=f"cmpfn_{k}_{V}",
+                                          help=_("Los importes se suman por llave. Una alícuota o una tasa no se suma: se compara su valor, "
+                                                 "y si una llave tiene varios valores distintos se marca como diferencia.")))
         tol = st.number_input(_("Tolerancia en importes"), value=float(cfg.tolerancia) if cfg is not None else 0.01, min_value=0.0,
                               step=0.01, format="%.2f", key=f"tol_g_{V}")
 
@@ -1133,7 +1141,7 @@ with tc:
             seg_prep = round(time.time() - ss.t_prep, 1) if ss.get("t_prep") else None
             t0 = time.time()
             with st.spinner(_("Cruzando…")):
-                ss.res_grupos = cruzar_grupos(grupos, comparaciones, Decimal(str(tol)))
+                ss.res_grupos = cruzar_grupos(grupos, comparaciones, Decimal(str(tol)), funciones_cmp)
                 seg_cruce = round(time.time() - t0, 2)
                 rg = ss.res_grupos
                 grande = max([len(rg.matriz), *[len(d) for d in rg.detalles.values()]]) > GRANDE
@@ -1149,7 +1157,8 @@ with tc:
                                buscar_por=a.buscar_por)
                     for ai, a in enumerate(arch)], controles=[ControlCfg(**vars(c)) for c in controles_g.get(gi, [])])
                     for gi, (nom, arch, modo, _) in enumerate(listos)],
-                comparaciones=[list(c) for c in comparaciones], tolerancia=str(tol), hojas_excel=hojas_excel)
+                comparaciones=[list(c) for c in comparaciones], funciones_comparacion=list(funciones_cmp),
+                tolerancia=str(tol), hojas_excel=hojas_excel)
             ss.archivos_actual = [a.nombre for _, arch, _, _ in listos for a in arch]
             # aprendizaje por uso: se recuerda la configuración para esta estructura de archivos (una vez por sesión)
             try:

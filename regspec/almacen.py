@@ -109,6 +109,7 @@ class GrupoCfg(BaseModel):
 class ConfigCruce(BaseModel):
     grupos: list[GrupoCfg]
     comparaciones: list[list[str]] = Field(default_factory=list)  # una columna por grupo
+    funciones_comparacion: list[str] = Field(default_factory=list)  # «suma» o «unico» por comparación (vacío = suma)
     tolerancia: str = "0.01"
     hojas_excel: list[str] = Field(default_factory=list)  # hojas elegidas para el Excel (vacío = todas)
 

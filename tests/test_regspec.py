@@ -1057,3 +1057,21 @@ def test_control_texto_y_columnas_faltantes():
     det, st = Grupo("G", [ArchivoGrupo("f", df, ["k"])], controles=[Control("a", "b"), Control("a", "no_existe")]).construir()
     assert det["control a = b"].tolist() == ["coincide", "distinta", "sin dato"]
     assert st["control a = no_existe: no se pudo evaluar"] == "faltan columnas: no_existe"
+
+
+def test_comparacion_por_valor_unico_no_suma_y_marca_varios_valores():
+    import pandas as pd
+
+    from regspec.grupos import ArchivoGrupo, Grupo, cruzar_grupos
+    a = pd.DataFrame({"cuit": ["1", "1", "2", "3", "3"], "tarifa": ["1.5", "1.5", "0", "3", "3"], "monto": ["10", "5", "1", "2", "2"]})
+    b = pd.DataFrame({"cuit": ["1", "1", "2", "3", "3"], "alic": ["01.50", "01.50", "01.50", "03.00", "02.00"], "monto": ["10", "5", "1", "2", "2"]})
+    r = cruzar_grupos([Grupo("A", [ArchivoGrupo("a", a, ["cuit"])]), Grupo("B", [ArchivoGrupo("b", b, ["cuit"])])],
+                      [("monto", "monto"), ("tarifa", "alic")], funciones=["suma", "unico"])
+    m = r.matriz.set_index("llave")
+    assert m.loc["1", "A.tarifa"] == 1.5 and m.loc["1", "B.alic"] == 1.5 and m.loc["1", "A.monto"] == 15  # no se suma
+    d = dict(zip(r.diferencias["llave"], r.diferencias["diferencias"]))
+    assert set(d) == {"2", "3"} and "dif. 1.5" in d["2"] and "varios valores (2 a 3)" in d["3"]
+    assert r.resumen["en todos, iguales"] == 1
+    # sin funciones: como antes (se suma)
+    r2 = cruzar_grupos([Grupo("A", [ArchivoGrupo("a", a, ["cuit"])]), Grupo("B", [ArchivoGrupo("b", b, ["cuit"])])], [("tarifa", "alic")])
+    assert r2.matriz.set_index("llave").loc["1", "A.tarifa"] == 3.0

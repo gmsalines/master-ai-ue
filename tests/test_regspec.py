@@ -1007,3 +1007,53 @@ def test_almacen_local_acepta_los_mismos_argumentos_que_la_app(tmp_path):
     cfg = ConfigCruce(grupos=[GrupoCfg(nombre="A", archivos=[ArchivoCfg(llave=["id"])])])
     g = a.guardar("prueba", cfg, {"x": 1}, ["a.csv"], b"xlsx", "local", "", "heuristica", None, None, 2, 300)
     assert a.listar()[0].id == g.id
+
+
+# ---------------------------------------------------------------- referencias encadenadas y controles entre columnas
+
+def _caso_alicuota():
+    import pandas as pd
+    presentado = pd.DataFrame({"cuit": ["20-1", "20-1", "27-2", "30-3", "33-4"], "jur": ["902", "904", "902", "902", "902"],
+                               "alicuota": ["01.50", "01.50", "00.00", "03.00", "01.00"], "monto": ["15", "15", "0", "30", "10"]})
+    padron = pd.DataFrame({"id": ["201", "272", "303"], "letra": ["r", "A", "V"]})
+    tabla = pd.DataFrame({"Letra": ["A", "R", "V"], "Tarifa (%)": ["0", "1.5", "3"]})
+    return presentado, padron, tabla
+
+
+def test_referencia_buscada_por_columna_traida_y_control_entre_columnas():
+    import io as _io
+
+    import pandas as pd
+
+    from regspec.grupos import ArchivoGrupo, Control, Grupo, cruzar_grupos
+    pres, pad, tab = _caso_alicuota()
+    g1 = Grupo("Presentado", [ArchivoGrupo("pres", pres, ["cuit"], "solo_numeros"),
+                              ArchivoGrupo("padron", pad, ["id"], "solo_numeros", traer=["letra"]),
+                              ArchivoGrupo("tabla", tab, ["Letra"], "normalizada", traer=["Tarifa (%)"], buscar_por=["letra"])],
+               "base_referencia", controles=[Control("alicuota", "Tarifa (%)", 0.001, "alícuota")])
+    det, st = g1.construir()
+    # «r» del padrón encuentra «R» de la tabla (misma normalización); el 33-4 no está en el padrón
+    assert det["Tarifa (%)"].tolist() == ["1.5", "1.5", "0", "3", None] or det["Tarifa (%)"].fillna("").tolist() == ["1.5", "1.5", "0", "3", ""]
+    assert det["control alícuota"].tolist() == ["coincide", "coincide", "coincide", "coincide", "sin dato"]
+    assert st["tabla buscada por"] == "letra" and st["encontradas en tabla"].startswith("4 de 5")
+    assert st["control alícuota: coincide / distinta / sin dato"] == "4 / 0 / 1"
+    # una alícuota mal informada
+    pres.loc[2, "alicuota"] = "01.50"
+    otro = pd.DataFrame({"cuit": ["201", "272", "303", "334"], "monto": ["30", "0", "30", "10"]})
+    r = cruzar_grupos([Grupo("Presentado", g1.archivos[:1] + [ArchivoGrupo("padron", pad, ["id"], "solo_numeros", traer=["letra"]),
+                                                              g1.archivos[2]], "base_referencia", controles=g1.controles),
+                       Grupo("Cliente", [ArchivoGrupo("cli", otro, ["cuit"], "solo_numeros")])], [("monto", "monto")])
+    assert r.resumen["en todos, iguales"] == 4 and r.resumen["filas que no pasan los controles"] == 2
+    assert dict(zip(r.controles["llave"], r.controles["estado"])) == {"272": "distinta", "334": "sin dato"}
+    h = pd.read_excel(_io.BytesIO(r.a_excel()), sheet_name=None, dtype=str)
+    assert "Controles" in h and len(h["Controles"]) == 2 and {"alicuota", "letra", "Tarifa (%)"} <= set(h["Controles"].columns)
+
+
+def test_control_texto_y_columnas_faltantes():
+    import pandas as pd
+
+    from regspec.grupos import ArchivoGrupo, Control, Grupo
+    df = pd.DataFrame({"k": ["1", "2", "3"], "a": ["abc ", "X", ""], "b": ["ABC", "Y", "z"]})
+    det, st = Grupo("G", [ArchivoGrupo("f", df, ["k"])], controles=[Control("a", "b"), Control("a", "no_existe")]).construir()
+    assert det["control a = b"].tolist() == ["coincide", "distinta", "sin dato"]
+    assert st["control a = no_existe: no se pudo evaluar"] == "faltan columnas: no_existe"

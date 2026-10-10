@@ -89,12 +89,21 @@ class ArchivoCfg(BaseModel):
     traer: list[str] = Field(default_factory=list)
     hoja: Optional[str] = None
     agregacion: Optional[AgregacionCfg] = None
+    buscar_por: list[str] = Field(default_factory=list)  # referencias encadenadas (ver ArchivoGrupo.buscar_por)
+
+
+class ControlCfg(BaseModel):
+    columna_a: str
+    columna_b: str
+    tolerancia: float = 0.0
+    nombre: str = ""
 
 
 class GrupoCfg(BaseModel):
     nombre: str
     modo: str = "concatenar"
     archivos: list[ArchivoCfg]
+    controles: list[ControlCfg] = Field(default_factory=list)
 
 
 class ConfigCruce(BaseModel):

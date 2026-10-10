@@ -413,6 +413,9 @@ class ArchivoGrupo:
     filtros: list[Filtro] = field(default_factory=list)
     traer: list[str] = field(default_factory=list)  # solo referencias en modo base_referencia
     agregacion: Optional[Agregacion] = None
+    # solo referencias: columnas de la base (o traídas por una referencia anterior) con las que se busca esta
+    # referencia; vacío = la llave de la base. Permite encadenar: padrón por identificador → tabla por letra.
+    buscar_por: list[str] = field(default_factory=list)
 
     def preparado(self, excluidas_out: Optional[list] = None, totales_out: Optional[list] = None) -> tuple[pd.DataFrame, int]:
         """Filtros, agrupación con condición sobre el total y llave construida. Si se pasan las listas
@@ -467,12 +470,53 @@ def _con_archivo(df: pd.DataFrame, nombre: str) -> pd.DataFrame:
     return df
 
 
+def _llave_de(df: pd.DataFrame, cols: list[str], tipo: str) -> pd.Series:
+    partes = [transformar_serie(df[c], tipo) for c in cols]
+    k = partes[0]
+    for x in partes[1:]:
+        k = k + "|" + x
+    return k
+
+
+CONTROL_OK, CONTROL_DISTINTA, CONTROL_SIN_DATO = "coincide", "distinta", "sin dato"
+
+
+@dataclass
+class Control:
+    """Compara dos columnas de cada fila del grupo (p. ej. la alícuota informada contra la que corresponde según una
+    tabla de referencia). Números con tolerancia (01.50 = 1,5); si no son números, texto sin mayúsculas ni espacios.
+    Estado por fila: «coincide», «distinta» o «sin dato» (falta alguno de los dos valores)."""
+    columna_a: str
+    columna_b: str
+    tolerancia: float = 0.0
+    nombre: str = ""
+
+    def titulo(self) -> str:
+        return f"control {self.nombre or f'{self.columna_a} = {self.columna_b}'}"
+
+    def evaluar(self, df: pd.DataFrame) -> pd.Series:
+        def limpio(s):
+            t = s.astype("string").fillna("").str.strip()
+            return t.mask(t.str.lower().isin(["nan", "none", "<na>"]), "")
+        a, b = limpio(df[self.columna_a]), limpio(df[self.columna_b])
+        na, nb = serie_numerica(a.mask(a == "")), serie_numerica(b.mask(b == ""))
+        falta = (a == "") | (b == "")
+        numerico = na.notna() & nb.notna()
+        with np.errstate(invalid="ignore"):
+            igual_num = ((na - nb).abs() <= float(self.tolerancia) + 1e-9).fillna(False)
+        igual_txt = a.str.upper().str.replace(r"\s+", "", regex=True) == b.str.upper().str.replace(r"\s+", "", regex=True)
+        igual = igual_num.where(numerico, igual_txt)
+        estado = np.where(falta, CONTROL_SIN_DATO, np.where(igual.to_numpy(dtype=bool), CONTROL_OK, CONTROL_DISTINTA))
+        return pd.Series(estado, index=df.index, dtype=object)
+
+
 @dataclass
 class Grupo:
     nombre: str
     archivos: list[ArchivoGrupo]
     modo: str = "concatenar"
     importes: list[str] = field(default_factory=list)  # columnas numéricas que se suman por llave
+    controles: list["Control"] = field(default_factory=list)  # comparaciones entre dos columnas del grupo
 
     def construir(self, excluidas_out: Optional[list] = None, totales_out: Optional[list] = None) -> tuple[pd.DataFrame, dict]:
         """Devuelve el detalle del grupo (filas con _llave) y estadísticas. Las filas excluidas (con su motivo) y los
@@ -488,10 +532,19 @@ class Grupo:
             for (ref, _), arch in zip(prep[1:], self.archivos[1:]):
                 cols = [c for c in (arch.traer or []) if c in ref.columns and c not in base.columns]
                 ref_u = ref.drop_duplicates("_llave")[["_llave", *cols]]
-                base = base.merge(ref_u, on="_llave", how="left", indicator=f"_en_{arch.nombre}")
-                encontrados = int((base[f"_en_{arch.nombre}"] == "both").sum())
+                ind = f"_en_{arch.nombre}"
+                por = [c for c in arch.buscar_por if c in base.columns]
+                if por:  # búsqueda encadenada: la llave de la referencia contra otras columnas de la base
+                    k = _llave_de(base, por, arch.transformacion)
+                    base = base.assign(_buscar=k.to_numpy()).merge(ref_u.rename(columns={"_llave": "_buscar"}),
+                                                                   on="_buscar", how="left", indicator=ind)
+                    base = base.drop(columns="_buscar")
+                    stats[f"{arch.nombre} buscada por"] = ", ".join(por)
+                else:
+                    base = base.merge(ref_u, on="_llave", how="left", indicator=ind)
+                encontrados = int((base[ind] == "both").sum())
                 stats[f"encontradas en {arch.nombre}"] = f"{encontrados} de {total_base} ({encontrados / max(1, total_base):.1%})"
-                base = base.drop(columns=f"_en_{arch.nombre}")
+                base = base.drop(columns=ind)
             detalle = base
         elif len(prep) == 1:  # un solo archivo: sin concatenar (con un millón de filas, una copia menos en memoria)
             detalle = prep[0][0]
@@ -505,6 +558,16 @@ class Grupo:
                       "llaves vacías (se excluyen del cruce)": vacias})
         if vacias:
             detalle = detalle[~es_vacia.to_numpy()]
+        for c in self.controles:
+            if c.columna_a in detalle.columns and c.columna_b in detalle.columns:
+                estado = c.evaluar(detalle)
+                detalle = detalle.assign(**{c.titulo(): estado.to_numpy()})
+                cuenta = estado.value_counts()
+                stats[f"{c.titulo()}: coincide / distinta / sin dato"] = " / ".join(
+                    str(int(cuenta.get(e, 0))) for e in (CONTROL_OK, CONTROL_DISTINTA, CONTROL_SIN_DATO))
+            else:
+                faltan = [x for x in (c.columna_a, c.columna_b) if x not in detalle.columns]
+                stats[f"{c.titulo()}: no se pudo evaluar"] = "faltan columnas: " + ", ".join(faltan)
         return detalle, stats
 
     def por_llave(self, detalle: pd.DataFrame) -> pd.DataFrame:
@@ -528,6 +591,7 @@ class ResultadoGrupos:
     detalles: dict                # nombre de grupo -> detalle
     excluidas: pd.DataFrame = field(default_factory=lambda: pd.DataFrame(columns=["grupo", "archivo", "motivo"]))
     totales: pd.DataFrame = field(default_factory=pd.DataFrame)  # totales por grupo de las agregaciones
+    controles: pd.DataFrame = field(default_factory=pd.DataFrame)  # filas que no pasan un control (distinta o sin dato)
 
     def a_excel(self, max_filas: int = 200_000, hojas_sel: Optional[list[str]] = None) -> bytes:
         """Excel del resultado. Cada hoja se limita a `max_filas` (Excel admite ~1 millón y escribir más es muy lento);
@@ -542,7 +606,8 @@ class ResultadoGrupos:
                 ([("Diferencias", self.diferencias)] if "diferencias" in sel else []) + \
                 ([(f"Detalle {g}", d) for g, d in self.detalles.items()] if "detalle" in sel else []) + \
                 ([("Excluidos", self.excluidas)] if "excluidos" in sel else []) + \
-                ([("Totales por grupo", self.totales)] if "totales" in sel and len(self.totales) else [])
+                ([("Totales por grupo", self.totales)] if "totales" in sel and len(self.totales) else []) + \
+                ([("Controles", self.controles)] if "controles" in sel and len(self.controles.columns) else [])
         recortes = [{"indicador": f"hoja «{n}» recortada", "valor": f"primeras {max_filas} de {len(df)} filas"}
                     for n, df in hojas if len(df) > max_filas]
         resumen = pd.DataFrame([{"indicador": k, "valor": str(v)} for k, v in self.resumen.items()] + recortes)
@@ -570,7 +635,7 @@ class ResultadoGrupos:
 
 HOJAS_EXCEL = {"resumen": "Resumen y estadísticas por grupo", "cruce": "Cruce por llave", "diferencias": "Diferencias",
                "detalle": "Detalle de cada grupo", "excluidos": "Excluidos (con el motivo)",
-               "totales": "Totales por grupo (agregaciones)"}
+               "totales": "Totales por grupo (agregaciones)", "controles": "Controles (filas que no coinciden)"}
 
 
 def _valor_excel(v):
@@ -658,9 +723,22 @@ def cruzar_grupos(grupos: list[Grupo], comparar: list[tuple[str, ...]] = (), tol
     excluidas = _primero(pd.concat(excl_todas, ignore_index=True) if excl_todas else
                          pd.DataFrame(columns=["grupo", "archivo", "motivo"]), ["grupo", "archivo", "motivo"])
     totales = _primero(pd.concat(tot_todos, ignore_index=True), ["grupo", "archivo"]) if tot_todos else pd.DataFrame()
+    ctl = []
+    for g in grupos:
+        det = detalles[g.nombre]
+        for c in g.controles:
+            if c.titulo() in det.columns:
+                malas = det[det[c.titulo()] != CONTROL_OK]
+                cols = [x for x in malas.columns if not str(x).startswith("_") and x != c.titulo()]
+                ctl.append(malas[cols].assign(grupo=g.nombre, control=c.titulo(), estado=malas[c.titulo()].to_numpy(),
+                                              llave=malas["_llave"].to_numpy()))
+    controles = (_primero(pd.concat(ctl, ignore_index=True), ["grupo", "control", "estado", "llave"]) if ctl else
+                 pd.DataFrame(columns=["grupo", "control", "estado", "llave"]) if any(g.controles for g in grupos) else pd.DataFrame())
     resumen["filas excluidas (filtros y agregaciones)"] = len(excluidas)
+    if any(g.controles for g in grupos):
+        resumen["filas que no pasan los controles"] = len(controles)
     return ResultadoGrupos(matriz, pd.DataFrame(difs, columns=["llave", "diferencias"]), resumen, estad, detalles,
-                           excluidas, totales)
+                           excluidas, totales, controles)
 
 
 def _primero(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:

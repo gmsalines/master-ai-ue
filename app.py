@@ -230,7 +230,7 @@ def guardar_en_biblioteca(spec: Especificacion, nombre: str) -> str:
             st.warning(f"{_('No se pudo guardar el formato en la cuenta')}: {e}")
     return slug
 
-from regspec.almacen import AgregacionCfg, AlmacenLocal, ArchivoCfg, ConfigCruce, FiltroCfg, GrupoCfg
+from regspec.almacen import AgregacionCfg, AlmacenLocal, ArchivoCfg, ConfigCruce, ControlCfg, FiltroCfg, GrupoCfg
 
 from regspec.almacen import AlmacenSupabase, config_equivalente, firma_archivos  # noqa: E402
 
@@ -572,7 +572,7 @@ with tc:
                   "memoria_descartada", "auto_aplicada", "auto_firma", "memoria_confianza", "memoria_obj", "llaves_ia",
                   "recordados", "mem_cache", "t_prep", "ia_llamadas", "ia_tokens", "ia_ult", "ver_estado", "res_excel_hojas"):
             ss.pop(k, None)
-        for k in [k for k in ss.keys() if str(k).startswith(("nfil_", "hoja_g", "ag_nt_", "ag_nu_"))]:
+        for k in [k for k in ss.keys() if str(k).startswith(("nfil_", "hoja_g", "ag_nt_", "ag_nu_", "nctl_"))]:
             del ss[k]
         ss.n_grupos = 2
         ss.carga_n += 1
@@ -654,7 +654,36 @@ with tc:
                                 ArchivoGrupo, Filtro, Grupo, cruzar_grupos, transformar)
 
     from regspec.grupos import (ACOMPANAN, AGREGACIONES, COLUMNAS_AUXILIARES, COMPARADORES, COMPARADORES_TEXTO,
-                                CONDICIONES, HOJAS_EXCEL, OPERACIONES, SALIDAS, Agregacion, Termino, Umbral)
+                                CONDICIONES, HOJAS_EXCEL, OPERACIONES, SALIDAS, Agregacion, Control, Termino, Umbral)
+
+    def editor_controles(cols: list, previos: list, k: str) -> list:
+        """«Controles entre columnas» de un grupo: compara dos columnas de cada fila (p. ej. alícuota informada contra la
+        de la tabla de referencia). Devuelve la lista de `Control`."""
+        kn = f"nctl_{k}"
+        ss.setdefault(kn, len(previos))
+        with st.expander(_("✓ Controles entre columnas ({0})").format(ss[kn]), expanded=bool(ss[kn])):
+            st.caption(_("Compara dos columnas de cada fila del grupo, por ejemplo la alícuota informada contra la que "
+                         "corresponde según el padrón. Las filas que no coinciden van a la hoja «Controles» del Excel."))
+            out = []
+            for ci in range(ss[kn]):
+                c0 = previos[ci] if ci < len(previos) else None
+                c1, c2, c3 = st.columns([2, 2, 1])
+                a = c1.selectbox(_("Columna"), cols, index=cols.index(c0.columna_a) if c0 and c0.columna_a in cols else 0,
+                                 key=f"ctla_{k}_{ci}")
+                b = c2.selectbox(_("tiene que coincidir con"), cols,
+                                 index=cols.index(c0.columna_b) if c0 and c0.columna_b in cols else min(1, len(cols) - 1),
+                                 key=f"ctlb_{k}_{ci}")
+                tol = c3.number_input(_("Tolerancia"), value=float(c0.tolerancia) if c0 else 0.0, min_value=0.0, step=0.001,
+                                      format="%.3f", key=f"ctlt_{k}_{ci}")
+                out.append(Control(a, b, tol, c0.nombre if c0 else ""))
+            b1, b2, _h = st.columns([1, 1, 2])
+            if b1.button(_("➕ Agregar control"), key=f"ctlmas_{k}"):
+                ss[kn] += 1
+                st.rerun()
+            if ss[kn] and b2.button(_("➖ Quitar el último"), key=f"ctlmenos_{k}"):
+                ss[kn] -= 1
+                st.rerun()
+        return out
 
     def editor_agregacion(f, df, cols: list, llave: list, previa, k: str):
         """«Agrupar y filtrar por total»: fórmula por fila, agrupación y condición con umbral por categoría.
@@ -933,6 +962,7 @@ with tc:
                     ss.memoria_descartada = firma_mem
                     st.rerun()
 
+    controles_g: dict = {}
     for gi in range(ss.n_grupos):
         with st.container(border=True):
             c_nom, c_modo = st.columns([1, 2])
@@ -964,7 +994,7 @@ with tc:
                     cols = [c for c in df.columns if not c.startswith("_")]
                     s = sugeridas.get((gi, f.name))
                     if acfg is not None:  # configuración guardada: manda sobre la sugerencia
-                        faltan = [c for c in acfg.llave + acfg.traer + [x.columna for x in acfg.filtros] +
+                        faltan = [c for c in acfg.llave + acfg.traer + [x.columna for x in acfg.filtros] + acfg.buscar_por +
                                   (acfg.agregacion.a_agregacion().columnas() if acfg.agregacion else []) if c not in cols]
                         if faltan:
                             st.warning(_("Columnas de la configuración que no están en este archivo: {0}").format(", ".join(faltan)))
@@ -1028,13 +1058,23 @@ with tc:
                         st.rerun()
                     agregacion = editor_agregacion(f, df, cols, llave, acfg.agregacion if acfg is not None else None,
                                                    f"{gi}_{fi}_{V}")
-                    traer = []
+                    traer, buscar_por = [], []
                     if modo_g == "base_referencia" and fi > 0:
                         opciones_t = [c for c in cols if c not in llave]
                         traer = st.multiselect(_("Columnas a traer a la base"), opciones_t, placeholder=_("Elegí una o varias columnas"),
                                                default=[c for c in (acfg.traer if acfg else []) if c in opciones_t], key=f"traer_{gi}_{fi}_{V}")
+                        if arch_objs:  # columnas disponibles en la base: las suyas y las que trajeron las referencias anteriores
+                            disp = [c for c in arch_objs[0].df.columns if not str(c).startswith("_")]
+                            disp += [c for a in arch_objs[1:] for c in a.traer if c not in disp]
+                            buscar_por = st.multiselect(
+                                _("Buscar por (columnas de la base)"), disp, placeholder=_("La llave de la base"),
+                                default=[c for c in (acfg.buscar_por if acfg else []) if c in disp], key=f"buscar_{gi}_{fi}_{V}",
+                                help=_("Vacío: se busca por la llave de la base. Elegí otra columna para encadenar búsquedas, "
+                                       "por ejemplo la letra que trajo el padrón contra una tabla de equivalencias."))
+                            if buscar_por and len(buscar_por) != len(llave):
+                                st.warning(_("«Buscar por» tiene que tener tantas columnas como la llave de este archivo ({0}).").format(len(llave)))
                     if llave:
-                        arch_objs.append(ArchivoGrupo(f.name, df, llave, tr, filtros, traer, agregacion))
+                        arch_objs.append(ArchivoGrupo(f.name, df, llave, tr, filtros, traer, agregacion, buscar_por))
                         hojas_sel[(gi, len(arch_objs) - 1)] = ss.get(f"hoja_g{gi}{fi}_{V}")
                     else:
                         completo = False
@@ -1047,6 +1087,7 @@ with tc:
                 if any(columnas_distintas(arch_objs[0].df, a.df) for a in arch_objs[1:]):
                     st.warning(_("Los archivos de «{0}» tienen columnas distintas y se van a concatenar (sumar sus filas). "
                                  "Si uno es un padrón o tabla de referencia, elegí «Base + referencia» en «Cómo combinar los archivos del grupo».").format(nombre_g))
+            controles_g[gi] = editor_controles(cols_g, gcfg.controles if gcfg else [], f"{gi}_{V}")
             grupos_ui.append((nombre_g, arch_objs, modo_g, cols_g))
     b1, b2, _hueco = st.columns([1, 1, 3])
     if b1.button(_("➕ Agregar grupo")):
@@ -1088,7 +1129,7 @@ with tc:
 
         st.subheader(_("3 · Resultado"))
         if st.button(_("Cruzar"), type="primary"):
-            grupos = [Grupo(nom, arch, modo, []) for nom, arch, modo, _ in listos]
+            grupos = [Grupo(nom, arch, modo, [], controles_g.get(gi, [])) for gi, (nom, arch, modo, _) in enumerate(listos)]
             seg_prep = round(time.time() - ss.t_prep, 1) if ss.get("t_prep") else None
             t0 = time.time()
             with st.spinner(_("Cruzando…")):
@@ -1104,8 +1145,10 @@ with tc:
                                filtros=[FiltroCfg(columna=x.columna, operador=x.operador, valor=x.valor, accion=x.accion,
                                                   valores=x.valores) for x in a.filtros],
                                traer=a.traer, hoja=hojas_sel.get((gi, ai)),
-                               agregacion=AgregacionCfg.desde(a.agregacion) if a.agregacion is not None else None)
-                    for ai, a in enumerate(arch)]) for gi, (nom, arch, modo, _) in enumerate(listos)],
+                               agregacion=AgregacionCfg.desde(a.agregacion) if a.agregacion is not None else None,
+                               buscar_por=a.buscar_por)
+                    for ai, a in enumerate(arch)], controles=[ControlCfg(**vars(c)) for c in controles_g.get(gi, [])])
+                    for gi, (nom, arch, modo, _) in enumerate(listos)],
                 comparaciones=[list(c) for c in comparaciones], tolerancia=str(tol), hojas_excel=hojas_excel)
             ss.archivos_actual = [a.nombre for _, arch, _, _ in listos for a in arch]
             # aprendizaje por uso: se recuerda la configuración para esta estructura de archivos (una vez por sesión)

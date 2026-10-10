@@ -373,6 +373,19 @@ PT: dict[str, str] = {
     "el total del grupo no cumple el umbral": "o total do grupo não cumpre o limite",
     "categoría sin umbral definido": "categoria sem limite definido", "división por cero": "divisão por zero",
     "filas excluidas (filtros y agregaciones)": "linhas excluídas (filtros e agregações)",
+    # referencias encadenadas y controles entre columnas
+    "Buscar por (columnas de la base)": "Buscar por (colunas da base)", "La llave de la base": "A chave da base",
+    "Compara dos columnas de cada fila del grupo, por ejemplo la alícuota informada contra la que corresponde según el padrón. Las filas que no coinciden van a la hoja «Controles» del Excel.":
+        "Compara duas colunas de cada linha do grupo, por exemplo a alíquota informada contra a que corresponde segundo o cadastro. As linhas que não coincidem vão para a planilha «Controles» do Excel.",
+    "Tolerancia": "Tolerância",
+    "Vacío: se busca por la llave de la base. Elegí otra columna para encadenar búsquedas, por ejemplo la letra que trajo el padrón contra una tabla de equivalencias.":
+        "Vazio: busca-se pela chave da base. Escolha outra coluna para encadear buscas, por exemplo a letra que veio do cadastro contra uma tabela de equivalências.",
+    "tiene que coincidir con": "tem que coincidir com",
+    "«Buscar por» tiene que tener tantas columnas como la llave de este archivo ({0}).":
+        "«Buscar por» tem que ter tantas colunas quanto a chave deste arquivo ({0}).",
+    "✓ Controles entre columnas ({0})": "✓ Controles entre colunas ({0})", "➕ Agregar control": "➕ Adicionar controle",
+    "Controles (filas que no coinciden)": "Controles (linhas que não coincidem)", "coincide": "coincide",
+    "distinta": "diferente", "sin dato": "sem dado", "filas que no pasan los controles": "linhas que não passam nos controles",
 }
 
 # mensajes variables del núcleo (validación y resúmenes del cruce)

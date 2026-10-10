@@ -998,3 +998,12 @@ def test_agregacion_se_guarda_y_se_recupera_en_la_configuracion():
     assert config_equivalente(cfg, cfg.model_copy(update={"hojas_excel": []}))
     # configuraciones guardadas antes de esta función siguen cargando
     assert ConfigCruce.model_validate({"grupos": [{"nombre": "A", "archivos": [{"llave": ["x"]}]}]}).grupos[0].archivos[0].agregacion is None
+
+
+def test_almacen_local_acepta_los_mismos_argumentos_que_la_app(tmp_path):
+    """La app guarda con 12 argumentos (incluido el uso de IA); el almacén local fallaba con TypeError."""
+    from regspec.almacen import AlmacenLocal, ArchivoCfg, ConfigCruce, GrupoCfg
+    a = AlmacenLocal(tmp_path, usuario="local")
+    cfg = ConfigCruce(grupos=[GrupoCfg(nombre="A", archivos=[ArchivoCfg(llave=["id"])])])
+    g = a.guardar("prueba", cfg, {"x": 1}, ["a.csv"], b"xlsx", "local", "", "heuristica", None, None, 2, 300)
+    assert a.listar()[0].id == g.id

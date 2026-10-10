@@ -249,7 +249,7 @@ class AlmacenLocal(Almacen):
         return self.carpeta / f"{id_}.{ext}"
 
     def guardar(self, nombre, config, resumen, archivos, excel, usuario="local", notas="", origen="heuristica",
-                aceptada=None, memoria_id=None):
+                aceptada=None, memoria_id=None, llamadas_ia=0, tokens_ia=0):  # mismos argumentos que AlmacenSupabase
         self.carpeta.mkdir(parents=True, exist_ok=True)
         c = CruceGuardado(id=uuid.uuid4().hex, nombre=nombre.strip() or "Cruce sin nombre", usuario=usuario,
                           fecha=datetime.now().isoformat(timespec="seconds"), config=config,

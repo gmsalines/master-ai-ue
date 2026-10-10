@@ -1101,3 +1101,32 @@ def test_referencias_encadenadas_en_cualquier_orden_y_valor_unico_exacto():
                       Decimal("0.05"), ["suma", "unico"])
     d = dict(zip(r.diferencias["llave"], r.diferencias["diferencias"]))
     assert set(d) == {"201"} and "Tarifa" in d["201"]  # 303: 30 vs 30.04 dentro de la tolerancia de importes
+
+
+def test_filtro_sin_valores_no_excluye_nada():
+    import pandas as pd
+
+    from regspec.grupos import ArchivoGrupo, Filtro, Grupo
+    df = pd.DataFrame({"k": ["1", "2"], "mes": ["05", "06"]})
+    det, st = Grupo("G", [ArchivoGrupo("f", df, ["k"], filtros=[Filtro("mes", "==", accion="incluir", valores=[])])]).construir()
+    assert len(det) == 2 and st["excluidas por filtros"] == 0
+    det, st = Grupo("G", [ArchivoGrupo("f", df, ["k"], filtros=[Filtro("mes", "vacío", accion="excluir")])]).construir()
+    assert len(det) == 2  # «está vacío» no necesita valores y se sigue aplicando
+
+
+def test_total_del_grupo_y_resumir_con_distinta_cantidad_de_filas():
+    import pandas as pd
+
+    from regspec.grupos import Agregacion, ArchivoGrupo, Grupo, Termino, Umbral, cruzar_grupos
+    cli = pd.DataFrame({"doc": ["A", "A", "A", "B", "B", "C"], "cred": [1000, 500, 700, 3000, 100, 50], "deb": [100, 200, 0, 0, 0, 10]})
+    ctl = pd.DataFrame({"doc": ["A", "A", "B", "C"], "cred": [1500, 700, 3100, 50], "deb": [300, 0, 0, 10]})  # mismos totales
+    comp = [("cred", "cred"), ("deb", "deb"), ("total del grupo", "total del grupo")]
+    for salida in ("filas", "resumir"):
+        g1 = Agregacion([Termino("cred"), Termino("deb")], ["doc"], "suma", "unica", None, [Umbral(">=", 2000)], salida=salida)
+        g2 = Agregacion([Termino("cred"), Termino("deb")], ["doc"], "suma", "ninguna", salida=salida)
+        r = cruzar_grupos([Grupo("Cliente", [ArchivoGrupo("c", cli, ["doc"], agregacion=g1)]),
+                           Grupo("Control", [ArchivoGrupo("k", ctl, ["doc"], agregacion=g2)])], comp)
+        assert r.resumen["en todos, iguales"] == 2 and r.resumen["en todos, con diferencias"] == 0, (salida, r.diferencias)
+        assert r.resumen["solo en Control"] == 1  # C no llega al umbral en el cliente
+        m = r.matriz.set_index("llave")
+        assert m.loc["A", "Cliente.total del grupo"] == 2500 and m.loc["A", "Cliente.cred"] == 2200

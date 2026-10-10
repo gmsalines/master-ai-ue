@@ -394,6 +394,8 @@ PT: dict[str, str] = {
         "A referência «{0}» de «{1}» encontrou só {2}% das linhas. Revise a sua chave, a normalização e «Buscar por» (por exemplo, uma tabela de equivalências se busca pela letra, não pelo identificador).",
     "Las llaves de los grupos casi no coinciden ({0} en común). Revisá que todos usen la misma columna (por ejemplo, el documento y no la cuenta) y la misma normalización.":
         "As chaves dos grupos quase não coincidem ({0} em comum). Revise se todos usam a mesma coluna (por exemplo, o documento e não a conta) e a mesma normalização.",
+    "Esta condición no tiene valores: no se aplica.": "Esta condição não tem valores: não é aplicada.",
+    "suma (columnas numéricas) y primer valor (texto)": "soma (colunas numéricas) e primeiro valor (texto)",
 }
 
 # mensajes variables del núcleo (validación y resúmenes del cruce)

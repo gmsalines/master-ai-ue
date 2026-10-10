@@ -783,7 +783,7 @@ with tc:
             sals = list(SALIDAS)
             salida = st.radio(_("Resultado"), sals, index=sals.index(previa.salida) if previa and previa.salida in sals else 0,
                               format_func=lambda x: _(SALIDAS[x]), key=f"ag_sal_{k}", label_visibility="collapsed")
-            acompanan = "primero"
+            acompanan = "suma"
             if salida == "resumir":
                 acs = list(ACOMPANAN)
                 acompanan = st.selectbox(_("Las demás columnas se llevan con"), acs,
@@ -1054,6 +1054,8 @@ with tc:
                         elif fop not in ("vacío", "no vacío"):
                             fval = fc3.text_input(_("valor"), f0.valor if f0 else "", key=f"fval_{fk}")
                         filtros.append(Filtro(fcol, fop, fval, accion, valores))
+                        if filtros[-1].sin_valores():
+                            st.caption(_("Esta condición no tiene valores: no se aplica."))
                     if st.button(_("➕ Otra condición"), key=f"masfil_{gi}_{fi}_{V}"):
                         ss[kn] += 1
                         st.rerun()
@@ -1124,7 +1126,8 @@ with tc:
                 fila.append(cc[j].selectbox(f"{nom}", cols_g, index=cols_g.index(elegido), key=f"cmp_{k}_{j}_{V}"))
             comparaciones.append(tuple(fila))
             fn_prev = (cfg.funciones_comparacion[k] if cfg is not None and k < len(cfg.funciones_comparacion) else
-                       "unico" if re.search(r"al[ií]cuota|tarifa|tasa|rate|porcentaje|%", " ".join(fila), re.I) else "suma")
+                       "unico" if re.search(r"al[ií]cuota|tarifa|tasa|rate|porcentaje|%|total del grupo|umbral aplicado", " ".join(fila), re.I)
+                       else "suma")
             funciones_cmp.append(st.radio(_("Cómo se agrupa por llave"), list(FUNCIONES_COMPARACION), horizontal=True,
                                           index=list(FUNCIONES_COMPARACION).index(fn_prev) if fn_prev in FUNCIONES_COMPARACION else 0,
                                           format_func=lambda x: _(FUNCIONES_COMPARACION[x]), key=f"cmpfn_{k}_{V}_{'|'.join(fila)}",

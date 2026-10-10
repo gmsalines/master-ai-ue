@@ -168,6 +168,10 @@ class Filtro:
         ops = {">": nums > vn, ">=": nums >= vn, "<": nums < vn, "<=": nums <= vn}
         return ops[self.operador].fillna(False).astype(bool)
 
+    def sin_valores(self) -> bool:
+        """Condición incompleta (p. ej. «es igual a» sin elegir valores): no se aplica, en vez de excluir todo."""
+        return self.operador not in ("vacío", "no vacío") and not self.lista()
+
     def descartar(self, df: pd.DataFrame) -> pd.Series:
         """True = la fila se descarta según la acción del filtro."""
         m = self.mascara(df)
@@ -192,7 +196,8 @@ CONDICIONES = {"ninguna": "Sin condición (solo agrupar)", "unica": "Un umbral p
                "categoria": "Umbral según el valor de una columna"}
 SALIDAS = {"filas": "Mantener las filas (se excluyen las de los grupos que no cumplen)",
            "resumir": "Resumir: una fila por grupo"}
-ACOMPANAN = {"primero": "primer valor", "ultimo": "último valor", "distintos": "cantidad de valores distintos"}
+ACOMPANAN = {"suma": "suma (columnas numéricas) y primer valor (texto)", "primero": "primer valor",
+             "ultimo": "último valor", "distintos": "cantidad de valores distintos"}
 COL_VALOR, COL_TOTAL, COL_UMBRAL, COL_CATEGORIA, COL_CUMPLE = (
     "valor calculado", "total del grupo", "umbral aplicado", "categoría", "cumple")
 COLUMNAS_AUXILIARES = [COL_VALOR, COL_TOTAL, COL_UMBRAL, COL_CATEGORIA]
@@ -237,7 +242,7 @@ class Agregacion:
     umbrales: list[Umbral] = field(default_factory=list)
     otros: str = "excluir"                # categorías sin umbral: excluir | sin_umbral
     salida: str = "filas"                 # filas | resumir
-    acompanan: str = "primero"            # en «resumir», cómo se llevan las columnas que no son del grupo
+    acompanan: str = "suma"               # en «resumir», cómo se llevan las columnas que no son del grupo
     mostrar: list[str] = field(default_factory=lambda: list(COLUMNAS_AUXILIARES))
 
     def columnas(self) -> list[str]:
@@ -386,6 +391,13 @@ class Agregacion:
             out = g.nunique()
         else:
             out = g.first()
+            if self.acompanan == "suma":  # columnas numéricas: se suman (no se toma la primera fila)
+                for c in resto:
+                    t = df[c].astype("string").str.strip()
+                    llenas = t.notna() & (t != "")
+                    num = serie_numerica(df[c])
+                    if llenas.any() and (num.notna() | ~llenas).all():
+                        out[c] = num.fillna(0.0).groupby(claves, sort=False, dropna=False).sum().round(6)
         primeros = pd.DataFrame({k: v.to_numpy() for k, v in aux.items() if k != COL_VALOR},
                                 index=df.index).groupby(claves, sort=False, dropna=False).first()
         for k in primeros.columns:
@@ -423,7 +435,7 @@ class ArchivoGrupo:
         df = self.df.copy(deep=False)  # sin duplicar los datos: solo se agregan columnas o se filtran filas
         excluidas = 0
         for f in self.filtros:
-            if f.columna in df.columns:
+            if f.columna in df.columns and not f.sin_valores():
                 m = f.descartar(df)
                 n = int(m.sum())
                 excluidas += n
@@ -688,6 +700,8 @@ def cruzar_grupos(grupos: list[Grupo], comparar: list[tuple[str, ...]] = (), tol
     las llaves que tienen varios valores distintos.
     """
     funciones = list(funciones or []) + ["suma"] * max(0, len(comparar) - len(funciones or []))
+    # el total de una agregación se repite en cada fila de su grupo: sumarlo por llave lo multiplicaría
+    funciones = ["unico" if any(c in (COL_TOTAL, COL_UMBRAL) for c in t) else fn for t, fn in zip(comparar, funciones)]
     for g in grupos:
         g.unicos = sorted({t[i] for t, fn in zip(comparar, funciones) if fn == "unico"
                            for i, gg in enumerate(grupos) if gg is g and i < len(t)})

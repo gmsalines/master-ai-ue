@@ -65,7 +65,7 @@ class AgregacionCfg(BaseModel):
     umbrales: list[UmbralCfg] = Field(default_factory=list)
     otros: str = "excluir"
     salida: str = "filas"
-    acompanan: str = "primero"
+    acompanan: str = "suma"
     mostrar: list[str] = Field(default_factory=lambda: ["valor calculado", "total del grupo", "umbral aplicado", "categoría"])
 
     def a_agregacion(self):

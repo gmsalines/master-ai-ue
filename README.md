@@ -73,7 +73,7 @@ biblioteca/         formatos reales cargados a mano (sin datos): se reconocen so
 ejemplos/           CSV para generar un informe; par sistema.csv / presentado.txt; ejemplos/grupos/ para la conciliación por grupos
 resultados/         salidas de las evaluaciones (detalle.csv y resumen.md por corrida; no se versiona)
 docs/               notas y migraciones SQL
-tests/              84 tests
+tests/              91 tests
 app.py              app en Streamlit
 ```
 
@@ -82,7 +82,7 @@ app.py              app en Streamlit
 ```bash
 python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-python -m pytest                                      # 84 tests
+python -m pytest                                      # 91 tests
 ```
 
 La clave del proveedor va en un archivo `.env` en la raíz, que no se versiona. En Streamlit Cloud va en *Secrets* (ver más abajo).

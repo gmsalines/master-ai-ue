@@ -808,6 +808,8 @@ def test_configuracion_desde_texto_invierte_doble_negacion_y_ancla_tolerancia():
     assert tolerancia_en_texto("con una tolerancia de 1 peso") == Decimal("1")
     assert tolerancia_en_texto("aceitando diferenças de um centavo") == Decimal("0.01")
     assert tolerancia_en_texto("compará con tolerancia 0,05.") == Decimal("0.05") and tolerancia_en_texto("sin nada") is None
+    assert tolerancia_en_texto("compará el monto con tolerancia de 1 centavo") == Decimal("0.01")
+    assert tolerancia_en_texto("hasta 5 centavos de diferencia") == Decimal("0.05")
     resp = {"archivos": [{"id": "G1A1", "llave": ["Nro_Factura"], "normalizacion": "solo_numeros"},
                          {"id": "G2A1", "llave": ["Comprobante"], "normalizacion": "solo_numeros",
                           "filtros": [{"columna": "Estado", "operador": "!=", "valores": ["ANULADO"], "accion": "excluir"}]}],

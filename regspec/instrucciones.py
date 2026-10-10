@@ -72,13 +72,14 @@ def tolerancia_en_texto(texto: str) -> Optional[Decimal]:
     if re.search(r"\bun\s+centavo|\bum\s+centavo", t):
         return Decimal("0.01")
     m = re.search(r"(?:toler[aâ]nc\w*|diferen[cç]\w*\s+de\s+(?:hasta|at[eé])|hasta|at[eé])\s*(?:de\s+)?(?:hasta\s+|at[eé]\s+)?"
-                  r"(\d+(?:[.,]\d+)?)", t)
+                  r"(\d+(?:[.,]\d+)?)\s*(centavos?|cent\b|cts?\b)?", t)
     if not m:
         return None
     try:
-        return Decimal(m.group(1).replace(",", "."))
+        v = Decimal(m.group(1).replace(",", "."))
     except InvalidOperation:
         return None
+    return v / 100 if m.group(2) else v  # «1 centavo» = 0,01; «1 peso» = 1
 
 
 def _llave(df: pd.DataFrame, cols: list[str], tr: str) -> pd.Series:

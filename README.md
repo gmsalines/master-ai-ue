@@ -370,13 +370,22 @@ A diferencia de la memoria de configuración, que es determinista y solo reconoc
 
 ## Describir el cruce con texto
 
-En el expander «Describir el cruce con texto» el usuario escribe qué quiere cruzar en lenguaje natural. El LLM propone la configuración (`regspec/instrucciones.py`) y una validación determinista la corrige antes de aplicarla:
+En «✍️ Describir el cruce con texto», arriba de los grupos (aparece cuando hay archivos en al menos dos grupos), el usuario escribe qué quiere cruzar en lenguaje natural y toca «Proponer la configuración». El LLM propone la configuración (`regspec/instrucciones.py`) y una validación determinista la corrige antes de aplicarla:
 
 - las columnas, operadores y valores tienen que existir en los archivos;
 - los importes tienen que ser columnas numéricas;
 - la normalización de la llave se ajusta según la solidez;
 - un filtro con doble negación que excluiría la mayoría de los registros se invierte;
-- la tolerancia se ancla al número que aparece en el texto.
+- la tolerancia se ancla al número que aparece en el texto. («1 centavo» = 0,01).
+
+La configuración validada se carga en el formulario (llaves, normalización, filtros, importes y tolerancia) y el usuario la
+revisa antes de cruzar; los avisos de la validación se muestran debajo. En las métricas el cruce queda con origen
+«Configuración desde texto» y se registra si el usuario la usó tal cual o la cambió. Limitación: el texto todavía no arma
+agrupaciones por total, referencias encadenadas ni comparaciones por valor único (se configuran a mano).
+
+**Comparar la llave del código con la de la IA.** Cuando el código ya encontró una llave clara, «🤖 Comparar la llave del
+código con la de la IA» permite pedir igual la propuesta del LLM (validada con el mismo criterio de solidez), para evaluar
+el respaldo con IA también sobre archivos reales.
 
 ## Cruces guardados e idiomas
 

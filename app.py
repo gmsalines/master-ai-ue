@@ -570,7 +570,7 @@ with tc:
         aplicar_config(None)
         for k in ("res_grupos", "res_excel", "cfg_actual", "archivos_actual", "aceptada", "memoria_id", "memoria_cfg",
                   "memoria_descartada", "auto_aplicada", "auto_firma", "memoria_confianza", "memoria_obj", "llaves_ia",
-                  "recordados", "mem_cache", "t_prep", "ia_llamadas", "ia_tokens", "ia_ult", "ver_estado", "res_excel_hojas"):
+                  "recordados", "mem_cache", "t_prep", "ia_llamadas", "ia_tokens", "ia_ult", "ver_estado", "res_excel_hojas", "texto_res"):
             ss.pop(k, None)
         for k in [k for k in ss.keys() if str(k).startswith(("nfil_", "hoja_g", "ag_nt_", "ag_nu_", "nctl_"))]:
             del ss[k]
@@ -869,9 +869,15 @@ with tc:
             for (gi, f, _tabla), s in zip(leidas, ia_res["llaves"]):
                 if s is not None:
                     sugeridas[(gi, f.name)] = (s[0], s[1], s[2], "ia")
-        elif (cfg is None and len({gi for gi, _f, _d in leidas}) >= 2 and not llaves_claras(lista_sug)):
-            with st.container(border=True):
-                st.markdown(_("🔎 **El código no encontró una llave clara** que vincule todos los archivos."))
+        elif cfg is None and len({gi for gi, _f, _d in leidas}) >= 2:
+            clara = llaves_claras(lista_sug)
+            caja = st.expander(_("🤖 Comparar la llave del código con la de la IA"), expanded=False) if clara else st.container(border=True)
+            with caja:
+                if clara:
+                    st.caption(_("El código ya encontró una llave clara. Si querés, podés pedirle igual una propuesta a la IA para "
+                                 "compararlas: se valida con el mismo criterio y, si la acepta, reemplaza a la del código."))
+                else:
+                    st.markdown(_("🔎 **El código no encontró una llave clara** que vincule todos los archivos."))
                 st.caption(_("Podés elegirla a mano o pedirle una propuesta a la IA: se le envían solo los nombres de las columnas "
                              "y 5 valores de ejemplo de cada una, y la propuesta se valida con código (las columnas tienen que existir "
                              "y sus valores tienen que coincidir entre archivos)."))
@@ -894,6 +900,54 @@ with tc:
             else:
                 st.warning(_("🤖 La propuesta de la IA no pasó la validación en todos los archivos; donde no la pasó se mantiene "
                              "la sugerencia del código. Motivo: {0}").format(ia_res["motivo"]))
+
+    # describir el cruce con texto: el LLM propone la configuración, la validación la corrige y se carga en el formulario
+    if leidas and len({gi for gi, _f, _d in leidas}) >= 2:
+        from regspec.instrucciones import configurar_desde_texto
+        res_txt = ss.get("texto_res")
+        with st.expander(_("✍️ Describir el cruce con texto (asistido por IA)"), expanded=res_txt is not None):
+            st.caption(_("Escribí qué querés cruzar con tus palabras, por ejemplo: «cruzá por CUIT, quedate solo con las leyendas "
+                         "SIRTAC y 680/2020, compará el monto retenido con tolerancia de 1 centavo». La IA propone la "
+                         "configuración, el código la valida contra los datos y se carga abajo para que la revises antes de cruzar. "
+                         "A la IA se le envían los nombres de las columnas y unos pocos valores de ejemplo, no los archivos."))
+            texto_u = st.text_area(_("Instrucción"), key=f"texto_cruce_{ss.carga_n}", height=90,
+                                   placeholder=_("¿Qué querés cruzar y cómo?"))
+            if st.button(_("Proponer la configuración"), key=f"texto_btn_{ss.carga_n}", disabled=proveedor is None or not texto_u.strip(),
+                         help=_("Requiere la clave de la IA (Configuración avanzada).") if proveedor is None else None):
+                cont = {}
+                archivos_txt = []
+                for gi, f, d in leidas:
+                    cont[gi] = cont.get(gi, 0) + 1
+                    archivos_txt.append((f"G{gi + 1}A{cont[gi]}", gi, d))
+                with st.spinner(_("Consultando a la IA…")):
+                    try:
+                        res_txt = configurar_desde_texto(texto_u, archivos_txt, proveedor)
+                    except Exception as e:  # noqa: BLE001
+                        res_txt = None
+                        st.error(_("La IA no pudo proponer una configuración: {0}").format(e))
+                    ss.ia_llamadas = ss.get("ia_llamadas", 0) + 1
+                if res_txt is not None:
+                    ss.ia_tokens = ss.get("ia_tokens", 0) + int(res_txt.get("tokens", 0))
+                    ss.texto_res = {k: v for k, v in res_txt.items() if k in ("avisos", "valida", "inventadas", "corregidas")}
+                    if res_txt["config"] is not None:
+                        from types import SimpleNamespace as _NS
+                        for g_ in res_txt["config"].grupos:  # el nombre visible de cada archivo
+                            for a_ in g_.archivos:
+                                gi_, n_ = int(a_.nombre_original[1:a_.nombre_original.index("A")]) - 1, int(a_.nombre_original.split("A")[-1])
+                                fs = [f for g2, f, _d in leidas if g2 == gi_]
+                                a_.nombre_original = fs[n_ - 1].name if n_ - 1 < len(fs) else a_.nombre_original
+                        aplicar_config(_NS(config=res_txt["config"], nombre=_("configuración desde texto")), "texto")
+                    st.rerun()
+            if res_txt is not None:
+                if res_txt["valida"]:
+                    st.success(_("Configuración cargada abajo: revisala antes de cruzar (llaves, filtros, importes y tolerancia)."))
+                else:
+                    st.warning(_("La IA no propuso una llave válida para todos los archivos: no se cargó la configuración."))
+                for a_ in res_txt["avisos"]:
+                    st.caption("• " + a_)
+                if res_txt.get("inventadas") or res_txt.get("corregidas"):
+                    st.caption(_("Validación: {0} referencias inexistentes descartadas, {1} correcciones aplicadas.").format(
+                        res_txt.get("inventadas", 0), res_txt.get("corregidas", 0)))
 
     # memoria de configuración: si ya se cruzaron archivos con esta misma estructura, se ofrece lo aprendido.
     # Se aplica sola solo si la confianza supera el 95 % y este usuario lo aceptó explícitamente.
@@ -1198,6 +1252,8 @@ with tc:
                         st.caption(f"{_('No se pudo actualizar el modelo de llave')}: {e}")
                     ss.memoria_id = mem.id if (mem is not None and almacen.remoto) else None
                     ss.aceptada = (not corregida) if de_memoria else (ia_ok if ia_res is not None else None)
+                    if ss.get("origen") == "texto" and ss.get("memoria_cfg") is not None:  # ¿la usó tal cual la propuso la IA?
+                        ss.aceptada = config_equivalente(ss.cfg_actual, ss.memoria_cfg)
                     ss.get("mem_cache", {}).pop(firma_real, None)
                     rg = ss.res_grupos
                     try:

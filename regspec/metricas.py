@@ -20,6 +20,7 @@ ORIGENES = {
     "memoria": "Configuración aprendida (ofrecida)",
     "memoria_auto": "Configuración aprendida (aplicada sola, > 95 %)",
     "guardado": "Cruce guardado reutilizado",
+    "texto": "Configuración desde texto (IA, validada)",
 }
 
 

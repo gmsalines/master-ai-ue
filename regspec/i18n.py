@@ -396,6 +396,24 @@ PT: dict[str, str] = {
         "As chaves dos grupos quase não coincidem ({0} em comum). Revise se todos usam a mesma coluna (por exemplo, o documento e não a conta) e a mesma normalização.",
     "Esta condición no tiene valores: no se aplica.": "Esta condição não tem valores: não é aplicada.",
     "suma (columnas numéricas) y primer valor (texto)": "soma (colunas numéricas) e primeiro valor (texto)",
+    "✍️ Describir el cruce con texto (asistido por IA)": "✍️ Descrever o cruzamento com texto (assistido por IA)",
+    "Escribí qué querés cruzar con tus palabras, por ejemplo: «cruzá por CUIT, quedate solo con las leyendas SIRTAC y 680/2020, compará el monto retenido con tolerancia de 1 centavo». La IA propone la configuración, el código la valida contra los datos y se carga abajo para que la revises antes de cruzar. A la IA se le envían los nombres de las columnas y unos pocos valores de ejemplo, no los archivos.":
+        "Escreva com as suas palavras o que quer cruzar, por exemplo: «cruze por CUIT, fique só com as legendas SIRTAC e 680/2020, compare o valor retido com tolerância de 1 centavo». A IA propõe a configuração, o código a valida contra os dados e ela é carregada abaixo para você revisar antes de cruzar. À IA são enviados os nomes das colunas e poucos valores de exemplo, não os arquivos.",
+    "Instrucción": "Instrução", "¿Qué querés cruzar y cómo?": "O que você quer cruzar e como?",
+    "Proponer la configuración": "Propor a configuração",
+    "Requiere la clave de la IA (Configuración avanzada).": "Requer a chave da IA (Configuração avançada).",
+    "La IA no pudo proponer una configuración: {0}": "A IA não conseguiu propor uma configuração: {0}",
+    "configuración desde texto": "configuração a partir de texto",
+    "Configuración cargada abajo: revisala antes de cruzar (llaves, filtros, importes y tolerancia).":
+        "Configuração carregada abaixo: revise-a antes de cruzar (chaves, filtros, valores e tolerância).",
+    "La IA no propuso una llave válida para todos los archivos: no se cargó la configuración.":
+        "A IA não propôs uma chave válida para todos os arquivos: a configuração não foi carregada.",
+    "Validación: {0} referencias inexistentes descartadas, {1} correcciones aplicadas.":
+        "Validação: {0} referências inexistentes descartadas, {1} correções aplicadas.",
+    "🤖 Comparar la llave del código con la de la IA": "🤖 Comparar a chave do código com a da IA",
+    "El código ya encontró una llave clara. Si querés, podés pedirle igual una propuesta a la IA para compararlas: se valida con el mismo criterio y, si la acepta, reemplaza a la del código.":
+        "O código já encontrou uma chave clara. Se quiser, pode pedir mesmo assim uma proposta à IA para compará-las: ela é validada com o mesmo critério e, se for aceita, substitui a do código.",
+    "Configuración desde texto (IA, validada)": "Configuração a partir de texto (IA, validada)",
 }
 
 # mensajes variables del núcleo (validación y resúmenes del cruce)

@@ -1026,8 +1026,9 @@ with tc:
                 _usar_memoria("memoria_auto")
                 st.rerun()
             with st.container(border=True):
-                st.markdown(_("🧠 **Ya cruzaste archivos con esta misma estructura** ({0} veces, confianza {1}%).").format(
-                    mem.veces_usado, mem.confianza))
+                _veces = (_("1 vez") if mem.veces_usado == 1 else _("{0} veces").format(mem.veces_usado))
+                st.markdown(_("🧠 **Ya cruzaste archivos con esta misma estructura** ({0}, confianza {1}%).").format(
+                    _veces, mem.confianza))
                 if mem.descripcion:
                     st.caption(mem.descripcion)
                 auto_ok = False

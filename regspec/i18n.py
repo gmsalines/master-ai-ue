@@ -247,8 +247,10 @@ PT: dict[str, str] = {
     "Tu usuario no tiene un espacio de trabajo asignado. Pedile acceso a la administradora.":
         "Seu usuário não tem um espaço de trabalho atribuído. Peça acesso à administradora.",
     "No se pudo guardar el formato en la cuenta": "Não foi possível salvar o formato na conta",
-    "🧠 **Ya cruzaste archivos con esta misma estructura** ({0} veces, confianza {1}%).":
-        "🧠 **Você já cruzou arquivos com esta mesma estrutura** ({0} vezes, confiança {1}%).",
+    "🧠 **Ya cruzaste archivos con esta misma estructura** ({0}, confianza {1}%).":
+        "🧠 **Você já cruzou arquivos com esta mesma estrutura** ({0}, confiança {1}%).",
+    "1 vez": "1 vez",
+    "{0} veces": "{0} vezes",
     "Usar la configuración aprendida": "Usar a configuração aprendida",
     "Configurar a mano": "Configurar manualmente",
     "configuración aprendida": "configuração aprendida",

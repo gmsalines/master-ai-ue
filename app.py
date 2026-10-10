@@ -605,11 +605,11 @@ with tc:
                 st.success(_('Formato reconocido: **{0}** · {1}').format(det.nombre_spec, _(det.detalle)))
                 with st.expander(_("Cambiar formato o tipo de registro")):
                     nombres = list(biblioteca)
-                    n = st.selectbox(_("Especificación"), nombres, index=nombres.index(det.nombre_spec), key=f"spec_{k}", format_func=_)
+                    n = st.selectbox(_("Especificación"), nombres, index=nombres.index(det.nombre_spec), key=f"spec_{k}_{firma_de(f)}", format_func=_)
                     spec_sel = biblioteca[n]
                     tipos = [t.codigo for t in spec_sel.tipos_registro]
                     tipo = st.selectbox(_("Tipo de registro a cruzar"), tipos,
-                                        index=tipos.index(tipo) if tipo in tipos else 0, key=f"tipo_{k}")
+                                        index=tipos.index(tipo) if tipo in tipos else 0, key=f"tipo_{k}_{firma_de(f)}_{n}")
             else:
                 st.warning(_("No reconozco el formato de este archivo. Subí su **manual técnico** y lo aprendo "
                            "(usa IA una sola vez; después queda guardado)."))
@@ -1125,7 +1125,7 @@ with tc:
                        "unico" if re.search(r"al[ií]cuota|tarifa|tasa|rate|porcentaje|%", " ".join(fila), re.I) else "suma")
             funciones_cmp.append(st.radio(_("Cómo se agrupa por llave"), list(FUNCIONES_COMPARACION), horizontal=True,
                                           index=list(FUNCIONES_COMPARACION).index(fn_prev) if fn_prev in FUNCIONES_COMPARACION else 0,
-                                          format_func=lambda x: _(FUNCIONES_COMPARACION[x]), key=f"cmpfn_{k}_{V}",
+                                          format_func=lambda x: _(FUNCIONES_COMPARACION[x]), key=f"cmpfn_{k}_{V}_{'|'.join(fila)}",
                                           help=_("Los importes se suman por llave. Una alícuota o una tasa no se suma: se compara su valor, "
                                                  "y si una llave tiene varios valores distintos se marca como diferencia.")))
         tol = st.number_input(_("Tolerancia en importes"), value=float(cfg.tolerancia) if cfg is not None else 0.01, min_value=0.0,
@@ -1222,6 +1222,18 @@ with tc:
                 [(n, int(r.resumen.get(f"solo en {n}", 0))) for n in nombres], int(r.resumen["llaves en el universo"]),
                 {"ok": _("Coinciden en todos los grupos"), "dif": _("En todos, con diferencias de importe"),
                  "solo": _("Solo en {0}"), "total": _("{0} llaves en total")}), unsafe_allow_html=True)
+            for g_, st_ in r.estadisticas.items():  # referencias que casi no encuentran nada: suele ser la llave o «Buscar por»
+                for k_, v_ in st_.items():
+                    mm = re.match(r"encontradas en (.+)$", str(k_))
+                    pc = re.search(r"\(([\d.]+)%\)", str(v_))
+                    if mm and pc and float(pc.group(1)) < 10:
+                        st.warning(_("La referencia «{0}» de «{1}» encontró solo {2}% de las filas. Revisá su llave, la normalización "
+                                     "y «Buscar por» (por ejemplo, una tabla de equivalencias se busca por la letra, no por el identificador).")
+                                   .format(mm.group(1), g_, pc.group(1)))
+            n_llaves = [int(str(st_.get("llaves únicas", 0)) or 0) for st_ in r.estadisticas.values()]
+            if n_llaves and min(n_llaves) > 0 and int(r.resumen["en todos los grupos"]) < 0.1 * min(n_llaves):
+                st.warning(_("Las llaves de los grupos casi no coinciden ({0} en común). Revisá que todos usen la misma columna "
+                             "(por ejemplo, el documento y no la cuenta) y la misma normalización.").format(r.resumen["en todos los grupos"]))
             with st.expander(_("Estadísticas por grupo (filas, llaves, duplicados, exclusiones, lookups)")):
                 est = pd.DataFrame({g: {k: str(v) for k, v in s.items()} for g, s in r.estadisticas.items()}).fillna("–")
                 st.dataframe(_df(est), width="stretch")

@@ -390,6 +390,10 @@ PT: dict[str, str] = {
     "Valor único por llave (alícuotas, tasas, códigos: no se suman)": "Valor único por chave (alíquotas, taxas, códigos: não se somam)",
     "Los importes se suman por llave. Una alícuota o una tasa no se suma: se compara su valor, y si una llave tiene varios valores distintos se marca como diferencia.":
         "Os valores se somam por chave. Uma alíquota ou uma taxa não se soma: compara-se o seu valor, e se uma chave tem vários valores diferentes, marca-se como diferença.",
+    "La referencia «{0}» de «{1}» encontró solo {2}% de las filas. Revisá su llave, la normalización y «Buscar por» (por ejemplo, una tabla de equivalencias se busca por la letra, no por el identificador).":
+        "A referência «{0}» de «{1}» encontrou só {2}% das linhas. Revise a sua chave, a normalização e «Buscar por» (por exemplo, uma tabela de equivalências se busca pela letra, não pelo identificador).",
+    "Las llaves de los grupos casi no coinciden ({0} en común). Revisá que todos usen la misma columna (por ejemplo, el documento y no la cuenta) y la misma normalización.":
+        "As chaves dos grupos quase não coincidem ({0} em comum). Revise se todos usam a mesma coluna (por exemplo, o documento e não a conta) e a mesma normalização.",
 }
 
 # mensajes variables del núcleo (validación y resúmenes del cruce)

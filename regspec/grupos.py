@@ -530,11 +530,22 @@ class Grupo:
         if self.modo == "base_referencia" and len(prep) > 1:
             base = prep[0][0]
             total_base = len(base)
-            for (ref, _), arch in zip(prep[1:], self.archivos[1:]):
+            pendientes = list(zip(prep[1:], self.archivos[1:]))
+            while pendientes:
+                # orden de dependencias: una referencia que se busca por una columna traída por otra va después de esa
+                listo = next((i for i, (_r, a) in enumerate(pendientes) if all(c in base.columns for c in a.buscar_por)), None)
+                if listo is None:  # lo que falta no lo trae ninguna referencia: se informa y no se busca por la llave
+                    for (_r, a) in pendientes:
+                        faltan = [c for c in a.buscar_por if c not in base.columns]
+                        stats[f"encontradas en {a.nombre}"] = f"0 de {total_base} (0.0%)"
+                        stats[f"{a.nombre}: no se pudo buscar"] = "falta la columna " + ", ".join(faltan)
+                        base = base.assign(**{c: None for c in a.traer if c not in base.columns})
+                    break
+                (ref, _), arch = pendientes.pop(listo)
                 cols = [c for c in (arch.traer or []) if c in ref.columns and c not in base.columns]
                 ref_u = ref.drop_duplicates("_llave")[["_llave", *cols]]
                 ind = f"_en_{arch.nombre}"
-                por = [c for c in arch.buscar_por if c in base.columns]
+                por = list(arch.buscar_por)
                 if por:  # búsqueda encadenada: la llave de la referencia contra otras columnas de la base
                     k = _llave_de(base, por, arch.transformacion)
                     base = base.assign(_buscar=k.to_numpy()).merge(ref_u.rename(columns={"_llave": "_buscar"}),
@@ -719,7 +730,7 @@ def cruzar_grupos(grupos: list[Grupo], comparar: list[tuple[str, ...]] = (), tol
     tol = float(tolerancia)
     textos: dict = {}
     en_todos = m["en todos"].to_numpy()
-    for t in comparar:
+    for t, fn in zip(comparar, funciones):
         cols = [(g.nombre, t[i], f"{g.nombre}.{t[i]}") for i, g in enumerate(grupos) if i < len(t) and f"{g.nombre}.{t[i]}" in m.columns]
         if len(cols) < 2:
             continue
@@ -727,7 +738,8 @@ def cruzar_grupos(grupos: list[Grupo], comparar: list[tuple[str, ...]] = (), tol
         validos = (~np.isnan(arr)).sum(axis=1) >= 2
         with np.errstate(all="ignore"):
             dif = np.round(np.nanmax(arr, axis=1) - np.nanmin(arr, axis=1), 6)
-        malas = np.flatnonzero(en_todos & validos & (dif > tol + 1e-9))
+        tol_t = 0.0 if fn == "unico" else tol  # alícuotas y tasas: coinciden o no (sin tolerancia)
+        malas = np.flatnonzero(en_todos & validos & (dif > tol_t + 1e-9))
         for k in malas:
             texto = " vs ".join(f"{g}.{c}={formatear_numero(arr[k, j])}" for j, (g, c, _) in enumerate(cols)) + \
                 f" (dif. {formatear_numero(dif[k])})"

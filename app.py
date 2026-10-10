@@ -1064,9 +1064,11 @@ with tc:
                         opciones_t = [c for c in cols if c not in llave]
                         traer = st.multiselect(_("Columnas a traer a la base"), opciones_t, placeholder=_("Elegí una o varias columnas"),
                                                default=[c for c in (acfg.traer if acfg else []) if c in opciones_t], key=f"traer_{gi}_{fi}_{V}")
-                        if arch_objs:  # columnas disponibles en la base: las suyas y las que trajeron las referencias anteriores
+                        if arch_objs:  # columnas de la base y las que traen las demás referencias (en cualquier orden)
                             disp = [c for c in arch_objs[0].df.columns if not str(c).startswith("_")]
-                            disp += [c for a in arch_objs[1:] for c in a.traer if c not in disp]
+                            for kk in range(1, len(archivos)):
+                                if kk != fi:
+                                    disp += [c for c in ss.get(f"traer_{gi}_{kk}_{V}", []) if c not in disp]
                             buscar_por = st.multiselect(
                                 _("Buscar por (columnas de la base)"), disp, placeholder=_("La llave de la base"),
                                 default=[c for c in (acfg.buscar_por if acfg else []) if c in disp], key=f"buscar_{gi}_{fi}_{V}",

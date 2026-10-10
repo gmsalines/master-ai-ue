@@ -1075,3 +1075,29 @@ def test_comparacion_por_valor_unico_no_suma_y_marca_varios_valores():
     # sin funciones: como antes (se suma)
     r2 = cruzar_grupos([Grupo("A", [ArchivoGrupo("a", a, ["cuit"])]), Grupo("B", [ArchivoGrupo("b", b, ["cuit"])])], [("tarifa", "alic")])
     assert r2.matriz.set_index("llave").loc["1", "A.tarifa"] == 3.0
+
+
+def test_referencias_encadenadas_en_cualquier_orden_y_valor_unico_exacto():
+    import pandas as pd
+
+    from regspec.grupos import ArchivoGrupo, Grupo, cruzar_grupos
+    pres, pad, tab = _caso_alicuota()
+    base = pd.DataFrame({"cuit": ["201", "272", "303"], "monto": ["30", "0", "30"]})
+    # la tabla de equivalencias subida ANTES que el padrón: igual se resuelve (primero el padrón, después la tabla)
+    g1 = Grupo("Cliente", [ArchivoGrupo("base", base, ["cuit"], "solo_numeros"),
+                           ArchivoGrupo("tabla", tab, ["Letra"], "normalizada", traer=["Tarifa (%)"], buscar_por=["letra"]),
+                           ArchivoGrupo("padron", pad, ["id"], "solo_numeros", traer=["letra"])], "base_referencia")
+    det, st = g1.construir()
+    assert det["Tarifa (%)"].tolist() == ["1.5", "0", "3"] and st["encontradas en tabla"].startswith("3 de 3")
+    # «buscar por» una columna que nadie trae: se avisa y no se busca por la llave de la base
+    g2 = Grupo("X", [ArchivoGrupo("base", base, ["cuit"], "solo_numeros"),
+                     ArchivoGrupo("tabla", tab, ["Letra"], "normalizada", traer=["Tarifa (%)"], buscar_por=["no_existe"])], "base_referencia")
+    det2, st2 = g2.construir()
+    assert st2["encontradas en tabla"].startswith("0 de 3") and "no_existe" in st2["tabla: no se pudo buscar"]
+    assert det2["Tarifa (%)"].isna().all()
+    # valor único sin tolerancia: 1.5 vs 1.49 es diferencia aunque la tolerancia de importes sea 0,05
+    b = pd.DataFrame({"cuit": ["201", "272", "303"], "alic": ["1.49", "0", "3"], "monto": ["30", "0", "30.04"]})
+    r = cruzar_grupos([g1, Grupo("Presentado", [ArchivoGrupo("p", b, ["cuit"])])], [("monto", "monto"), ("Tarifa (%)", "alic")],
+                      Decimal("0.05"), ["suma", "unico"])
+    d = dict(zip(r.diferencias["llave"], r.diferencias["diferencias"]))
+    assert set(d) == {"201"} and "Tarifa" in d["201"]  # 303: 30 vs 30.04 dentro de la tolerancia de importes

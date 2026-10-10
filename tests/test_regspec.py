@@ -898,7 +898,103 @@ def test_excel_de_grupos_por_filas_con_recorte():
     r = cruzar_grupos([Grupo("A", [ArchivoGrupo("a", a, ["id"])]), Grupo("B", [ArchivoGrupo("b", b, ["id"])])],
                       [("monto", "monto")])
     h = pd.read_excel(_io.BytesIO(r.a_excel(max_filas=10)), sheet_name=None, dtype=str)
-    assert list(h) == ["Resumen", "Grupos", "Cruce por llave", "Diferencias", "Detalle A", "Detalle B"]
+    assert list(h) == ["Resumen", "Grupos", "Cruce por llave", "Diferencias", "Detalle A", "Detalle B", "Excluidos"]
     assert len(h["Cruce por llave"]) == 10 and len(h["Detalle B"]) == 10
     assert h["Resumen"]["valor"].str.contains("primeras 10 de 40 filas").any()
     assert h["Resumen"]["indicador"].tolist()[0] == "llaves en el universo"
+
+
+# ---------------------------------------------------------------- agrupar y filtrar por total
+
+def _movimientos():
+    import pandas as pd
+    return pd.DataFrame({
+        "doc": ["111", "111", "222", "222", "333", "444"], "tipo": ["1", "CPF", "CNPJ", "2", "1", "9"],
+        "mes": ["01"] * 6, "cuenta": ["a", "b", "c", "d", "e", "f"],
+        "cred": ["1000", "1500", "3000", "2000", "100", "5"], "deb": ["-500", "0", "1000", "0", "50", "0"]})
+
+
+def _agregacion_umbral(**kw):
+    from regspec.grupos import Agregacion, Termino, Umbral
+    base = dict(terminos=[Termino("cred"), Termino("deb", "+", True)], agrupar_por=["doc", "mes"], funcion="suma",
+                condicion="categoria", categoria="tipo",
+                umbrales=[Umbral(">", 2000, ["1", "CPF"]), Umbral(">", 6000, ["2", "CNPJ"])])
+    base.update(kw)
+    return Agregacion(**base)
+
+
+def test_agregacion_umbral_por_categoria_mantiene_filas():
+    from regspec.grupos import COL_TOTAL, COL_UMBRAL, MOTIVO_SIN_UMBRAL, MOTIVO_UMBRAL
+    ag = _agregacion_umbral()
+    assert ag.formula() == "suma(cred + |deb|) por doc, mes"
+    ok, excl, tot = ag.aplicar(_movimientos())
+    # 111: 1000 + |−500| + 1500 = 3000 > 2000 (los dos formatos de categoría, «1» y «CPF», van al mismo umbral)
+    assert ok["cuenta"].tolist() == ["a", "b"] and ok[COL_TOTAL].tolist() == [3000.0, 3000.0]
+    assert set(ok[COL_UMBRAL]) == {"> 2000"}
+    # 222: 6000 no es mayor que 6000; 333: 150; 444: categoría sin umbral
+    motivos = dict(zip(excl["cuenta"], excl["motivo"]))
+    assert motivos == {"c": MOTIVO_UMBRAL, "d": MOTIVO_UMBRAL, "e": MOTIVO_UMBRAL, "f": MOTIVO_SIN_UMBRAL}
+    assert set(tot.loc[tot["cumple"] == "sí", "doc"]) == {"111"}
+    # categorías sin umbral: pasan si se elige «sin umbral»
+    ok2, _e, _t = _agregacion_umbral(otros="sin_umbral").aplicar(_movimientos())
+    assert ok2["cuenta"].tolist() == ["a", "b", "f"]
+
+
+def test_agregacion_operaciones_y_division_por_cero():
+    from regspec.grupos import COL_VALOR, MOTIVO_DIV0, Agregacion, Termino
+    df = _movimientos()
+    ag = Agregacion([Termino("cred"), Termino("deb", "-"), Termino("cred", "*")], ["doc"])
+    assert ag.valor(df).tolist()[:2] == [(1000 + 500) * 1000, 1500 * 1500]  # de izquierda a derecha
+    ok, excl, _t = Agregacion([Termino("cred"), Termino("deb", "/")], ["doc"]).aplicar(df)
+    assert set(excl["motivo"]) == {MOTIVO_DIV0} and set(excl["cuenta"]) == {"b", "d", "f"}
+    assert ok.loc[ok["cuenta"] == "a", COL_VALOR].item() == -2.0
+    # otras funciones de agregación
+    for fn, esperado in (("cantidad", 2), ("maximo", 1500.0), ("minimo", 1000.0), ("promedio", 1250.0)):
+        ok, _e, _t = Agregacion([Termino("cred")], ["doc"], fn).aplicar(df)
+        assert ok.loc[ok["doc"] == "111", "total del grupo"].iloc[0] == esperado
+
+
+def test_agregacion_resumir_y_cruce_con_hoja_de_excluidos():
+    import io as _io
+
+    import pandas as pd
+
+    from regspec.grupos import ArchivoGrupo, Filtro, Grupo, cruzar_grupos
+    ok, _e, _t = _agregacion_umbral(salida="resumir").aplicar(_movimientos())
+    assert len(ok) == 1 and ok["doc"].item() == "111" and ok["filas del grupo"].item() == 2
+    assert ok["total del grupo"].item() == 3000.0
+    # en el cruce: el grupo A se filtra por mes y por total; las cuentas que no llegan al umbral no se cruzan
+    a = ArchivoGrupo("movs", _movimientos(), ["cuenta"], filtros=[Filtro("mes", "==", valores=["01"], accion="incluir")],
+                     agregacion=_agregacion_umbral())
+    b = pd.DataFrame({"cuenta": ["a", "b", "c"], "monto": ["1", "1", "1"]})
+    r = cruzar_grupos([Grupo("Sistema", [a]), Grupo("Declarado", [ArchivoGrupo("decl", b, ["cuenta"])])])
+    assert r.resumen["en todos los grupos"] == 2 and r.resumen["solo en Declarado"] == 1  # «c» declarada sin llegar al umbral
+    assert len(r.excluidas) == 4 and {"grupo", "archivo", "motivo"} <= set(r.excluidas.columns)
+    assert r.estadisticas["Sistema"]["agregación en movs"] == "suma(cred + |deb|) por doc, mes"
+    h = pd.read_excel(_io.BytesIO(r.a_excel()), sheet_name=None, dtype=str)
+    assert "Excluidos" in h and "Totales por grupo" in h and len(h["Excluidos"]) == 4
+    # hojas elegidas por el usuario
+    h2 = pd.read_excel(_io.BytesIO(r.a_excel(hojas_sel=["excluidos", "totales"])), sheet_name=None, dtype=str)
+    assert list(h2) == ["Excluidos", "Totales por grupo"]
+
+
+def test_serie_numerica_via_rapida_respeta_ceros_y_formatos():
+    import pandas as pd
+
+    from regspec.grupos import serie_numerica
+    assert serie_numerica(pd.Series(["000000000000000280.38", "12", "", None, "-3.5"])).fillna(-1).tolist() == [280.38, 12.0, -1, -1, -3.5]
+    assert serie_numerica(pd.Series(["1.234,56", "12"])).tolist() == [1234.56, 12.0]  # vía completa
+    assert serie_numerica(pd.Series([1, 2.5])).tolist() == [1.0, 2.5]
+
+
+def test_agregacion_se_guarda_y_se_recupera_en_la_configuracion():
+    from regspec.almacen import AgregacionCfg, ArchivoCfg, ConfigCruce, GrupoCfg, config_equivalente
+    ag = _agregacion_umbral(salida="resumir", mostrar=["total del grupo"])
+    cfg = ConfigCruce(grupos=[GrupoCfg(nombre="A", archivos=[ArchivoCfg(llave=["doc"], agregacion=AgregacionCfg.desde(ag))])],
+                      hojas_excel=["excluidos"])
+    vuelta = ConfigCruce.model_validate_json(cfg.model_dump_json())
+    assert vuelta.grupos[0].archivos[0].agregacion.a_agregacion() == ag
+    # elegir otras hojas del Excel no cuenta como corregir la configuración aprendida
+    assert config_equivalente(cfg, cfg.model_copy(update={"hojas_excel": []}))
+    # configuraciones guardadas antes de esta función siguen cargando
+    assert ConfigCruce.model_validate({"grupos": [{"nombre": "A", "archivos": [{"llave": ["x"]}]}]}).grupos[0].archivos[0].agregacion is None

@@ -82,7 +82,14 @@ def numero(v) -> Optional[Decimal]:
 
 def serie_numerica(s: pd.Series) -> pd.Series:
     """Versión vectorizada de `numero` (float; NaN si no es numérico). Acepta 1.234,56 · 1,234.56 · 12,5 · $ 100."""
-    t = s.astype("string").str.strip().str.replace(r"[\s$]", "", regex=True)
+    if pd.api.types.is_numeric_dtype(s) and not pd.api.types.is_bool_dtype(s):
+        return s.astype(float)
+    t0 = s.astype("string").str.strip()
+    simples = t0.str.fullmatch(r"[+-]?\d+(\.\d+)?", na=False)
+    vacios = t0.isna() | (t0 == "")
+    if bool((simples | vacios).all()):  # vía rápida: números sin separador de miles ni moneda (la mayoría de los CSV)
+        return t0.mask(vacios).astype("float64").astype(float)  # astype respeta los ceros a la izquierda
+    t = t0.str.replace(r"[\s$]", "", regex=True)
     t = t.str.replace(r"^([+-]?)[A-Za-z€]{1,3}(?=[\d+-])", r"\1", regex=True)  # prefijo de moneda: R$, US$, €
     coma, punto = t.str.contains(",", regex=False), t.str.contains(".", regex=False)
     coma_ultima = t.str.rfind(",") > t.str.rfind(".")
@@ -167,6 +174,236 @@ class Filtro:
         return m if self.accion != "incluir" else ~m
 
 
+def describir_filtro_texto(f: Filtro) -> str:
+    """Descripción del filtro para la columna «motivo» de las filas excluidas."""
+    vals = " | ".join(f.lista())
+    return f"{ACCIONES.get(f.accion, f.accion).rstrip('…')} {f.columna} {OPERADORES_TEXTO.get(f.operador, f.operador)} {vals}".strip()
+
+
+# ------------------------------------------------------------------ agrupar y filtrar por total (GROUP BY … HAVING)
+
+OPERACIONES = {"+": "suma", "-": "resta", "*": "multiplica por", "/": "divide por"}
+SIMBOLOS = {"+": "+", "-": "−", "*": "×", "/": "÷"}
+AGREGACIONES = {"suma": "Suma", "cantidad": "Cantidad de filas", "maximo": "Máximo", "minimo": "Mínimo",
+                "promedio": "Promedio"}
+COMPARADORES = [">", ">=", "<", "<="]
+COMPARADORES_TEXTO = {">": "mayor que", ">=": "mayor o igual a", "<": "menor que", "<=": "menor o igual a"}
+CONDICIONES = {"ninguna": "Sin condición (solo agrupar)", "unica": "Un umbral para todas las filas",
+               "categoria": "Umbral según el valor de una columna"}
+SALIDAS = {"filas": "Mantener las filas (se excluyen las de los grupos que no cumplen)",
+           "resumir": "Resumir: una fila por grupo"}
+ACOMPANAN = {"primero": "primer valor", "ultimo": "último valor", "distintos": "cantidad de valores distintos"}
+COL_VALOR, COL_TOTAL, COL_UMBRAL, COL_CATEGORIA, COL_CUMPLE = (
+    "valor calculado", "total del grupo", "umbral aplicado", "categoría", "cumple")
+COLUMNAS_AUXILIARES = [COL_VALOR, COL_TOTAL, COL_UMBRAL, COL_CATEGORIA]
+MOTIVO_UMBRAL, MOTIVO_SIN_UMBRAL, MOTIVO_DIV0 = (
+    "el total del grupo no cumple el umbral", "categoría sin umbral definido", "división por cero")
+
+
+@dataclass
+class Termino:
+    """Una columna de la fórmula. `operacion` la combina con lo anterior (se ignora en el primer término)."""
+    columna: str
+    operacion: str = "+"
+    absoluto: bool = False
+
+
+@dataclass
+class Umbral:
+    """Condición sobre el total del grupo. `valores`: categorías a las que se aplica (vacío = todas)."""
+    comparador: str = ">"
+    umbral: float = 0.0
+    valores: list[str] = field(default_factory=list)
+
+    def texto(self) -> str:
+        return f"{self.comparador} {formatear_numero(self.umbral)}"
+
+
+@dataclass
+class Agregacion:
+    """Columna calculada por fila, agregación por grupo y condición sobre el total (con umbral por categoría).
+
+    1. valor = t1 op t2 op t3 … (de izquierda a derecha; cada término puede ir en valor absoluto; los vacíos valen 0);
+    2. total = función(valor) por cada combinación de `agrupar_por`;
+    3. condición: total <comparador> umbral, donde el umbral depende de la categoría de la fila (`categoria`).
+       Las filas de los grupos que no cumplen se excluyen y quedan registradas con su motivo.
+    4. salida: «filas» conserva las filas que cumplen; «resumir» deja una fila por grupo.
+    """
+    terminos: list[Termino] = field(default_factory=list)
+    agrupar_por: list[str] = field(default_factory=list)
+    funcion: str = "suma"
+    condicion: str = "ninguna"           # ninguna | unica | categoria
+    categoria: Optional[str] = None
+    umbrales: list[Umbral] = field(default_factory=list)
+    otros: str = "excluir"                # categorías sin umbral: excluir | sin_umbral
+    salida: str = "filas"                 # filas | resumir
+    acompanan: str = "primero"            # en «resumir», cómo se llevan las columnas que no son del grupo
+    mostrar: list[str] = field(default_factory=lambda: list(COLUMNAS_AUXILIARES))
+
+    def columnas(self) -> list[str]:
+        """Columnas del archivo que usa la agregación (para avisar si faltan)."""
+        cols = [t.columna for t in self.terminos] + list(self.agrupar_por)
+        if self.condicion == "categoria" and self.categoria:
+            cols.append(self.categoria)
+        return list(dict.fromkeys(cols))
+
+    def formula(self) -> str:
+        if not self.terminos:
+            return AGREGACIONES.get(self.funcion, self.funcion).lower()
+        partes = []
+        for i, t in enumerate(self.terminos):
+            c = f"|{t.columna}|" if t.absoluto else t.columna
+            partes.append(c if i == 0 else f"{SIMBOLOS.get(t.operacion, t.operacion)} {c}")
+        cuerpo = " ".join(partes)
+        return f"{AGREGACIONES.get(self.funcion, self.funcion).lower()}({cuerpo})" + \
+            (f" por {', '.join(self.agrupar_por)}" if self.agrupar_por else "")
+
+    def valor(self, df: pd.DataFrame) -> pd.Series:
+        """Columna calculada, fila por fila. NaN solo donde hay una división por cero."""
+        if not self.terminos:
+            return pd.Series(1.0, index=df.index)
+        v = None
+        for t in self.terminos:
+            x = serie_numerica(df[t.columna]).fillna(0.0) if t.columna in df.columns else pd.Series(0.0, index=df.index)
+            if t.absoluto:
+                x = x.abs()
+            if v is None:
+                v = x
+            elif t.operacion == "-":
+                v = v - x
+            elif t.operacion == "*":
+                v = v * x
+            elif t.operacion == "/":
+                v = v / x.where(x != 0)  # x/0 -> NaN (se excluye la fila con ese motivo)
+            else:
+                v = v + x
+        return v.round(6)
+
+    def _umbral_por_fila(self, df: pd.DataFrame) -> tuple[pd.Series, pd.Series, pd.Series, pd.Series]:
+        """Comparador, umbral, texto del umbral y si la fila tiene umbral, según su categoría."""
+        comp = pd.Series(None, index=df.index, dtype=object)
+        umb = pd.Series(np.nan, index=df.index)
+        txt = pd.Series("", index=df.index, dtype=object)
+        if self.condicion == "unica" and self.umbrales:
+            u = self.umbrales[0]
+            comp[:], umb[:], txt[:] = u.comparador, float(u.umbral), u.texto()
+        elif self.condicion == "categoria" and self.categoria in df.columns:
+            # la categoría tiene pocos valores distintos: la coincidencia se evalúa sobre ellos y no fila por fila
+            cat = df[self.categoria].astype("string").fillna("").str.strip()
+            uniq = pd.DataFrame({self.categoria: pd.unique(cat)})
+            libre_u = pd.Series(True, index=uniq.index)
+            asignado = pd.Series(-1, index=uniq.index)
+            for i, u in enumerate(self.umbrales):
+                m = (Filtro(self.categoria, "==", valores=list(u.valores)).mascara(uniq) if u.valores
+                     else pd.Series(True, index=uniq.index))  # sin valores: todas las categorías que no tengan otro umbral
+                m = m & libre_u
+                asignado[m] = i
+                libre_u &= ~m
+            idx = cat.map(dict(zip(uniq[self.categoria], asignado))).fillna(-1).astype(int).to_numpy()
+            for i, u in enumerate(self.umbrales):
+                m = idx == i
+                if m.any():
+                    comp[m], umb[m], txt[m] = u.comparador, float(u.umbral), u.texto()
+        tiene = comp.notna()
+        return comp, umb, txt, tiene
+
+    def aplicar(self, df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """Devuelve (filas o grupos que cumplen, filas excluidas con su motivo, totales por grupo)."""
+        grupo = [c for c in self.agrupar_por if c in df.columns]
+        valor = self.valor(df)
+        excl = []
+        div0 = valor.isna()
+        if div0.any():
+            e = df[div0].copy()
+            e["motivo"] = MOTIVO_DIV0
+            excl.append(e)
+            df, valor = df[~div0], valor[~div0]
+        claves = [df[c].astype("string").fillna("").str.strip() for c in grupo]
+        if claves:
+            g = valor.groupby(claves, sort=False, dropna=False)
+            fn = {"suma": "sum", "cantidad": "count", "maximo": "max", "minimo": "min", "promedio": "mean"}.get(self.funcion, "sum")
+            total = g.transform(fn)
+        else:  # sin columnas de grupo: todo el archivo es un grupo
+            total = pd.Series(getattr(valor, {"cantidad": "count", "maximo": "max", "minimo": "min",
+                                               "promedio": "mean"}.get(self.funcion, "sum"))(), index=df.index)
+        total = total.astype(float).round(6)
+        comp, umb, umbral_txt, tiene = self._umbral_por_fila(df)
+        if self.condicion == "ninguna":
+            cumple = pd.Series(True, index=df.index)
+        else:
+            t, u = total.to_numpy(), umb.to_numpy()
+            c = comp.to_numpy()
+            with np.errstate(invalid="ignore"):
+                ok = np.select([c == ">", c == ">=", c == "<", c == "<="], [t > u, t >= u, t < u, t <= u], default=False)
+            cumple = pd.Series(ok, index=df.index)
+            if self.otros == "sin_umbral":
+                cumple |= ~tiene
+        cat = (df[self.categoria].astype("string").fillna("").str.strip()
+               if self.condicion == "categoria" and self.categoria in df.columns else pd.Series("", index=df.index))
+
+        # totales por grupo (siempre: es el control de lo que se aplicó)
+        tot = pd.DataFrame({c: k.to_numpy() for c, k in zip(grupo, claves)})
+        tot[COL_CATEGORIA], tot[COL_TOTAL], tot[COL_UMBRAL] = cat.to_numpy(), total.to_numpy(), umbral_txt.to_numpy()
+        tot[COL_CUMPLE] = np.where(cumple.to_numpy(), "sí", "no")
+        tot["filas"] = 1
+        if self.condicion != "categoria":
+            tot = tot.drop(columns=COL_CATEGORIA)
+        llave_t = [c for c in tot.columns if c not in ("filas",)]
+        totales = tot.groupby(llave_t, sort=False, dropna=False)["filas"].sum().reset_index()
+
+        # filas excluidas por la condición
+        no = ~cumple
+        if no.any():
+            e = df[no].copy()
+            e["motivo"] = np.where((~tiene)[no].to_numpy(), MOTIVO_SIN_UMBRAL, MOTIVO_UMBRAL)
+            e[COL_TOTAL], e[COL_UMBRAL] = total[no].to_numpy(), umbral_txt[no].to_numpy()
+            excl.append(e)
+        excluidas = pd.concat(excl, ignore_index=True) if excl else pd.DataFrame(columns=["motivo"])
+
+        ok_df = df[cumple].copy(deep=False)
+        aux = {COL_VALOR: valor[cumple], COL_TOTAL: total[cumple], COL_UMBRAL: umbral_txt[cumple], COL_CATEGORIA: cat[cumple]}
+        if self.condicion != "categoria":
+            aux.pop(COL_CATEGORIA)
+        if self.condicion == "ninguna":
+            aux.pop(COL_UMBRAL)
+        if self.salida == "resumir" and grupo:
+            ok_df = self._resumir(ok_df, grupo, aux)
+        else:
+            for k, v in aux.items():
+                if k in self.mostrar:
+                    ok_df[_libre(ok_df, k)] = v.to_numpy()
+        return ok_df, excluidas, totales
+
+    def _resumir(self, df: pd.DataFrame, grupo: list[str], aux: dict) -> pd.DataFrame:
+        claves = [df[c].astype("string").fillna("").str.strip().rename(c) for c in grupo]
+        resto = [c for c in df.columns if c not in grupo and not str(c).startswith("_")]
+        g = df[resto].groupby(claves, sort=False, dropna=False) if resto else None
+        if g is None:
+            out = pd.DataFrame(index=pd.MultiIndex.from_arrays(claves).unique())
+        elif self.acompanan == "ultimo":
+            out = g.last()
+        elif self.acompanan == "distintos":
+            out = g.nunique()
+        else:
+            out = g.first()
+        primeros = pd.DataFrame({k: v.to_numpy() for k, v in aux.items() if k != COL_VALOR},
+                                index=df.index).groupby(claves, sort=False, dropna=False).first()
+        for k in primeros.columns:
+            if k in self.mostrar or k == COL_TOTAL:  # en un resumen el total siempre va: es el dato del grupo
+                out[_libre(out, k)] = primeros[k]
+        out["filas del grupo"] = pd.Series(1, index=df.index).groupby(claves, sort=False, dropna=False).sum()
+        out = out.reset_index()
+        return out
+
+
+def _libre(df: pd.DataFrame, nombre: str) -> str:
+    """Nombre de columna que no pisa una existente."""
+    n, i = nombre, 2
+    while n in df.columns:
+        n, i = f"{nombre} ({i})", i + 1
+    return n
+
+
 @dataclass
 class ArchivoGrupo:
     nombre: str
@@ -175,22 +412,59 @@ class ArchivoGrupo:
     transformacion: str = "exacta"
     filtros: list[Filtro] = field(default_factory=list)
     traer: list[str] = field(default_factory=list)  # solo referencias en modo base_referencia
+    agregacion: Optional[Agregacion] = None
 
-    def preparado(self) -> tuple[pd.DataFrame, int]:
+    def preparado(self, excluidas_out: Optional[list] = None, totales_out: Optional[list] = None) -> tuple[pd.DataFrame, int]:
+        """Filtros, agrupación con condición sobre el total y llave construida. Si se pasan las listas
+        `excluidas_out` / `totales_out`, se agregan ahí las filas excluidas (con su motivo) y los totales por grupo."""
         df = self.df.copy(deep=False)  # sin duplicar los datos: solo se agregan columnas o se filtran filas
         excluidas = 0
         for f in self.filtros:
             if f.columna in df.columns:
                 m = f.descartar(df)
-                excluidas += int(m.sum())
+                n = int(m.sum())
+                excluidas += n
+                if n and excluidas_out is not None:
+                    e = df[m].copy()
+                    e["motivo"] = describir_filtro_texto(f)
+                    excluidas_out.append(_con_archivo(e, self.nombre))
                 df = df[~m]
-        partes = [transformar_serie(df[c], self.transformacion) for c in self.llave]
+        if self.agregacion is not None:
+            df, e, tot = self.agregacion.aplicar(df)
+            excluidas += len(e)
+            if excluidas_out is not None and len(e):
+                excluidas_out.append(_con_archivo(e, self.nombre))
+            if totales_out is not None:
+                totales_out.append(_con_archivo(tot, self.nombre))
+        partes = [transformar_serie(df[c], self.transformacion) if c in df.columns else pd.Series("", index=df.index, dtype=object)
+                  for c in self.llave]
         llave = partes[0]
         for p in partes[1:]:
             llave = llave + "|" + p
         df["_llave"] = llave
         df["_archivo"] = self.nombre
         return df, excluidas
+
+    def columnas_resultado(self) -> list[str]:
+        """Columnas que tendrá el archivo después de la agrupación (para elegir importes a comparar)."""
+        cols = [c for c in self.df.columns if not str(c).startswith("_")]
+        a = self.agregacion
+        if a is None:
+            return cols
+        aux = [c for c in COLUMNAS_AUXILIARES if c in a.mostrar or (a.salida == "resumir" and c == COL_TOTAL)]
+        if a.condicion != "categoria":
+            aux = [c for c in aux if c != COL_CATEGORIA]
+        if a.condicion == "ninguna":
+            aux = [c for c in aux if c != COL_UMBRAL]
+        if a.salida == "resumir":
+            aux = [c for c in aux if c != COL_VALOR] + ["filas del grupo"]
+        return cols + [c for c in aux if c not in cols]
+
+
+def _con_archivo(df: pd.DataFrame, nombre: str) -> pd.DataFrame:
+    df = df.copy(deep=False)
+    df.insert(0, "archivo", nombre) if "archivo" not in df.columns else None
+    return df
 
 
 @dataclass
@@ -200,10 +474,14 @@ class Grupo:
     modo: str = "concatenar"
     importes: list[str] = field(default_factory=list)  # columnas numéricas que se suman por llave
 
-    def construir(self) -> tuple[pd.DataFrame, dict]:
-        """Devuelve el detalle del grupo (filas con _llave) y estadísticas."""
-        prep = [a.preparado() for a in self.archivos]
+    def construir(self, excluidas_out: Optional[list] = None, totales_out: Optional[list] = None) -> tuple[pd.DataFrame, dict]:
+        """Devuelve el detalle del grupo (filas con _llave) y estadísticas. Las filas excluidas (con su motivo) y los
+        totales por grupo de las agregaciones se agregan a `excluidas_out` y `totales_out`, si se pasan."""
+        prep = [a.preparado(excluidas_out, totales_out) for a in self.archivos]
         stats = {"archivos": len(self.archivos), "excluidas por filtros": sum(e for _, e in prep)}
+        for a in self.archivos:
+            if a.agregacion is not None:
+                stats[f"agregación en {a.nombre}"] = a.agregacion.formula()
         if self.modo == "base_referencia" and len(prep) > 1:
             base = prep[0][0]
             total_base = len(base)
@@ -248,8 +526,10 @@ class ResultadoGrupos:
     resumen: dict
     estadisticas: dict
     detalles: dict                # nombre de grupo -> detalle
+    excluidas: pd.DataFrame = field(default_factory=lambda: pd.DataFrame(columns=["grupo", "archivo", "motivo"]))
+    totales: pd.DataFrame = field(default_factory=pd.DataFrame)  # totales por grupo de las agregaciones
 
-    def a_excel(self, max_filas: int = 200_000) -> bytes:
+    def a_excel(self, max_filas: int = 200_000, hojas_sel: Optional[list[str]] = None) -> bytes:
         """Excel del resultado. Cada hoja se limita a `max_filas` (Excel admite ~1 millón y escribir más es muy lento);
         si se recorta, se indica en la hoja Resumen.
 
@@ -257,8 +537,12 @@ class ResultadoGrupos:
         armar el libro entero en memoria (como hace pandas.to_excel) se quedaba sin memoria."""
         from openpyxl import Workbook
 
-        hojas = [("Cruce por llave", self.matriz), ("Diferencias", self.diferencias)] + \
-                [(f"Detalle {g}", d) for g, d in self.detalles.items()]
+        sel = set(hojas_sel) if hojas_sel else set(HOJAS_EXCEL)
+        hojas = ([("Cruce por llave", self.matriz)] if "cruce" in sel else []) + \
+                ([("Diferencias", self.diferencias)] if "diferencias" in sel else []) + \
+                ([(f"Detalle {g}", d) for g, d in self.detalles.items()] if "detalle" in sel else []) + \
+                ([("Excluidos", self.excluidas)] if "excluidos" in sel else []) + \
+                ([("Totales por grupo", self.totales)] if "totales" in sel and len(self.totales) else [])
         recortes = [{"indicador": f"hoja «{n}» recortada", "valor": f"primeras {max_filas} de {len(df)} filas"}
                     for n, df in hojas if len(df) > max_filas]
         resumen = pd.DataFrame([{"indicador": k, "valor": str(v)} for k, v in self.resumen.items()] + recortes)
@@ -273,13 +557,20 @@ class ResultadoGrupos:
             for fila in (df if tope is None else df.head(tope)).itertuples(index=False, name=None):
                 ws.append([_valor_excel(v) for v in fila])
 
-        hoja("Resumen", resumen, None)
-        hoja("Grupos", grupos, None)
+        if "resumen" in sel or not (sel - {"resumen"}):
+            hoja("Resumen", resumen, None)
+        if "resumen" in sel:
+            hoja("Grupos", grupos, None)
         for n, df in hojas:
             hoja(n, df)
         buf = io.BytesIO()
         wb.save(buf)
         return buf.getvalue()
+
+
+HOJAS_EXCEL = {"resumen": "Resumen y estadísticas por grupo", "cruce": "Cruce por llave", "diferencias": "Diferencias",
+               "detalle": "Detalle de cada grupo", "excluidos": "Excluidos (con el motivo)",
+               "totales": "Totales por grupo (agregaciones)"}
 
 
 def _valor_excel(v):
@@ -306,8 +597,12 @@ def cruzar_grupos(grupos: list[Grupo], comparar: list[tuple[str, ...]] = (), tol
     [("monto_retenido", "Monto Retenido")]. Se comparan los importes sumados por llave.
     """
     detalles, estad, por = {}, {}, {}
+    excl_todas, tot_todos = [], []
     for g in grupos:
-        det, st = g.construir()
+        excl_g, tot_g = [], []
+        det, st = g.construir(excl_g, tot_g)
+        excl_todas += [e.assign(grupo=g.nombre) for e in excl_g]
+        tot_todos += [t.assign(grupo=g.nombre) for t in tot_g]
         detalles[g.nombre], estad[g.nombre] = det, st
         g_imp = set(g.importes) | {t[i] for t in comparar for i, gg in enumerate(grupos) if gg is g and i < len(t)}
         g.importes = [c for c in g_imp if c in det.columns]
@@ -360,7 +655,18 @@ def cruzar_grupos(grupos: list[Grupo], comparar: list[tuple[str, ...]] = (), tol
         resumen[f"solo en {g.nombre}"] = int(solo.sum())
         resumen[f"cobertura de {g.nombre} (llaves presentes en todos los demás)"] = (
             f"{int(m.loc[presencia[f'en {g.nombre}'], 'en todos'].sum())} de {int(presencia[f'en {g.nombre}'].sum())}")
-    return ResultadoGrupos(matriz, pd.DataFrame(difs, columns=["llave", "diferencias"]), resumen, estad, detalles)
+    excluidas = _primero(pd.concat(excl_todas, ignore_index=True) if excl_todas else
+                         pd.DataFrame(columns=["grupo", "archivo", "motivo"]), ["grupo", "archivo", "motivo"])
+    totales = _primero(pd.concat(tot_todos, ignore_index=True), ["grupo", "archivo"]) if tot_todos else pd.DataFrame()
+    resumen["filas excluidas (filtros y agregaciones)"] = len(excluidas)
+    return ResultadoGrupos(matriz, pd.DataFrame(difs, columns=["llave", "diferencias"]), resumen, estad, detalles,
+                           excluidas, totales)
+
+
+def _primero(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
+    """Reordena para que `cols` vayan primero (las que existan)."""
+    adelante = [c for c in cols if c in df.columns]
+    return df[adelante + [c for c in df.columns if c not in adelante]]
 
 
 # ------------------------------------------------------------------ sugerencia de llaves (sin IA)

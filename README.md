@@ -73,7 +73,7 @@ biblioteca/         formatos reales cargados a mano (sin datos): se reconocen so
 ejemplos/           CSV para generar un informe; par sistema.csv / presentado.txt; ejemplos/grupos/ para la conciliación por grupos
 resultados/         salidas de las evaluaciones (detalle.csv y resumen.md por corrida; no se versiona)
 docs/               notas y migraciones SQL
-tests/              76 tests
+tests/              84 tests
 app.py              app en Streamlit
 ```
 
@@ -82,7 +82,7 @@ app.py              app en Streamlit
 ```bash
 python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-python -m pytest                                      # 76 tests
+python -m pytest                                      # 84 tests
 ```
 
 La clave del proveedor va en un archivo `.env` en la raíz, que no se versiona. En Streamlit Cloud va en *Secrets* (ver más abajo).
@@ -329,6 +329,22 @@ La heurística no solo falla: presenta la llave equivocada como **clara** (solid
 - En XML la estructura es plana: raíz → registros → campos simples.
 - Formato `delimitado` (p. ej. campos separados por `;`): los campos van en el orden de la lista y los decimales llevan punto explícito. Con `campos_ancho_fijo: true` cada campo ocupa además un ancho exacto (numéricos con ceros a la izquierda; el ancho de un decimal es `longitud + 1`). `codificacion` indica utf-8 o latin-1.
 - Si una regla referencia un dato opcional no informado, la regla no aplica a ese registro.
+
+## Agrupar y filtrar por total
+
+Cada archivo puede agruparse antes del cruce, con una condición sobre el total del grupo (un `GROUP BY … HAVING`):
+
+- **Columna calculada por fila:** columnas combinadas con suma, resta, multiplicación o división, de izquierda a
+  derecha; cada columna puede tomarse en valor absoluto. Los vacíos valen 0; una división por cero excluye la fila.
+- **Agrupación:** por cualquier combinación de columnas, con suma, cantidad de filas, máximo, mínimo o promedio.
+- **Condición:** sin condición, un umbral para todas las filas o un umbral según el valor de una columna (varios
+  valores por umbral; comparadores >, ≥, <, ≤). Las categorías sin umbral se excluyen o pasan sin umbral.
+- **Salida:** se mantienen las filas de los grupos que cumplen o se resume a una fila por grupo; el usuario elige qué
+  columnas auxiliares se agregan (valor calculado, total del grupo, umbral aplicado, categoría).
+- **Control:** las filas excluidas (por filtros o por la condición) van a la hoja «Excluidos» con su motivo, y los
+  totales de cada grupo a «Totales por grupo». El usuario elige qué hojas lleva el Excel.
+
+La regla se guarda con el cruce y en la memoria de configuración. Con un millón de filas tarda unos 4 s.
 
 ## Conciliación: sugerencia de llaves y archivos grandes
 

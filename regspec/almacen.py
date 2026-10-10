@@ -43,6 +43,44 @@ class FiltroCfg(BaseModel):
     valores: list[str] = Field(default_factory=list)
 
 
+class TerminoCfg(BaseModel):
+    columna: str
+    operacion: str = "+"
+    absoluto: bool = False
+
+
+class UmbralCfg(BaseModel):
+    comparador: str = ">"
+    umbral: float = 0.0
+    valores: list[str] = Field(default_factory=list)
+
+
+class AgregacionCfg(BaseModel):
+    """Agrupar y filtrar por total (ver `regspec.grupos.Agregacion`)."""
+    terminos: list[TerminoCfg] = Field(default_factory=list)
+    agrupar_por: list[str] = Field(default_factory=list)
+    funcion: str = "suma"
+    condicion: str = "ninguna"
+    categoria: Optional[str] = None
+    umbrales: list[UmbralCfg] = Field(default_factory=list)
+    otros: str = "excluir"
+    salida: str = "filas"
+    acompanan: str = "primero"
+    mostrar: list[str] = Field(default_factory=lambda: ["valor calculado", "total del grupo", "umbral aplicado", "categoría"])
+
+    def a_agregacion(self):
+        from regspec.grupos import Agregacion, Termino, Umbral
+        d = self.model_dump()
+        d["terminos"] = [Termino(**t) for t in d["terminos"]]
+        d["umbrales"] = [Umbral(**u) for u in d["umbrales"]]
+        return Agregacion(**d)
+
+    @classmethod
+    def desde(cls, ag) -> "AgregacionCfg":
+        from dataclasses import asdict
+        return cls.model_validate(asdict(ag))
+
+
 class ArchivoCfg(BaseModel):
     nombre_original: str = ""                 # solo informativo
     llave: list[str]
@@ -50,6 +88,7 @@ class ArchivoCfg(BaseModel):
     filtros: list[FiltroCfg] = Field(default_factory=list)
     traer: list[str] = Field(default_factory=list)
     hoja: Optional[str] = None
+    agregacion: Optional[AgregacionCfg] = None
 
 
 class GrupoCfg(BaseModel):
@@ -62,6 +101,7 @@ class ConfigCruce(BaseModel):
     grupos: list[GrupoCfg]
     comparaciones: list[list[str]] = Field(default_factory=list)  # una columna por grupo
     tolerancia: str = "0.01"
+    hojas_excel: list[str] = Field(default_factory=list)  # hojas elegidas para el Excel (vacío = todas)
 
     def archivo(self, gi: int, fi: int) -> Optional[ArchivoCfg]:
         if gi < len(self.grupos) and fi < len(self.grupos[gi].archivos):
@@ -127,6 +167,7 @@ def config_equivalente(a: ConfigCruce, b: ConfigCruce) -> bool:
     """Igualdad de configuración ignorando nombres de archivo y de grupo (lo que el usuario puede renombrar)."""
     def limpia(c: ConfigCruce):
         d = c.model_dump()
+        d.pop("hojas_excel", None)  # preferencia de salida, no cambia el cruce
         for g in d["grupos"]:
             g.pop("nombre", None)
             for a_ in g["archivos"]:

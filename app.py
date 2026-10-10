@@ -230,7 +230,7 @@ def guardar_en_biblioteca(spec: Especificacion, nombre: str) -> str:
             st.warning(f"{_('No se pudo guardar el formato en la cuenta')}: {e}")
     return slug
 
-from regspec.almacen import AlmacenLocal, ArchivoCfg, ConfigCruce, FiltroCfg, GrupoCfg
+from regspec.almacen import AgregacionCfg, AlmacenLocal, ArchivoCfg, ConfigCruce, FiltroCfg, GrupoCfg
 
 from regspec.almacen import AlmacenSupabase, config_equivalente, firma_archivos  # noqa: E402
 
@@ -570,9 +570,9 @@ with tc:
         aplicar_config(None)
         for k in ("res_grupos", "res_excel", "cfg_actual", "archivos_actual", "aceptada", "memoria_id", "memoria_cfg",
                   "memoria_descartada", "auto_aplicada", "auto_firma", "memoria_confianza", "memoria_obj", "llaves_ia",
-                  "recordados", "mem_cache", "t_prep", "ia_llamadas", "ia_tokens", "ia_ult", "ver_estado"):
+                  "recordados", "mem_cache", "t_prep", "ia_llamadas", "ia_tokens", "ia_ult", "ver_estado", "res_excel_hojas"):
             ss.pop(k, None)
-        for k in [k for k in ss.keys() if str(k).startswith(("nfil_", "hoja_g"))]:
+        for k in [k for k in ss.keys() if str(k).startswith(("nfil_", "hoja_g", "ag_nt_", "ag_nu_"))]:
             del ss[k]
         ss.n_grupos = 2
         ss.carga_n += 1
@@ -652,6 +652,128 @@ with tc:
 
     from regspec.grupos import (ACCIONES, MODOS, OPERADORES, OPERADORES_MULTIVALOR, OPERADORES_TEXTO, TRANSFORMACIONES,
                                 ArchivoGrupo, Filtro, Grupo, cruzar_grupos, transformar)
+
+    from regspec.grupos import (ACOMPANAN, AGREGACIONES, COLUMNAS_AUXILIARES, COMPARADORES, COMPARADORES_TEXTO,
+                                CONDICIONES, HOJAS_EXCEL, OPERACIONES, SALIDAS, Agregacion, Termino, Umbral)
+
+    def editor_agregacion(f, df, cols: list, llave: list, previa, k: str):
+        """«Agrupar y filtrar por total»: fórmula por fila, agrupación y condición con umbral por categoría.
+        Devuelve una `Agregacion` o None si está desactivada."""
+        activo = st.toggle(_("Agrupar y filtrar por total"), value=previa is not None, key=f"ag_on_{k}",
+                           help=_("Calcula una columna con una fórmula, la agrupa (por ejemplo, por documento y mes) y "
+                                  "excluye los grupos cuyo total no cumple un umbral, que puede depender de una columna."))
+        if not activo:
+            return None
+        with st.container(border=True):
+            # 1. fórmula
+            st.markdown(_("**Columna calculada (por fila)**"))
+            kn = f"ag_nt_{k}"
+            ss.setdefault(kn, max(1, len(previa.terminos) if previa else 2))
+            terminos = []
+            ops = list(OPERACIONES)
+            for ti in range(ss[kn]):
+                t0 = previa.terminos[ti] if previa and ti < len(previa.terminos) else None
+                c_op, c_col, c_abs = st.columns([1, 2, 1])
+                op = "+"
+                if ti > 0:
+                    op = c_op.selectbox(_("Operación"), ops, index=ops.index(t0.operacion) if t0 and t0.operacion in ops else 0,
+                                        format_func=lambda o: _(OPERACIONES[o]), key=f"ag_op_{k}_{ti}")
+                else:
+                    c_op.caption(_("Primera columna"))
+                col_def = t0.columna if t0 and t0.columna in cols else cols[min(ti, len(cols) - 1)]
+                col = c_col.selectbox(_("Columna"), cols, index=cols.index(col_def), key=f"ag_col_{k}_{ti}")
+                absv = c_abs.checkbox(_("en valor absoluto"), value=bool(t0.absoluto) if t0 else False, key=f"ag_abs_{k}_{ti}")
+                terminos.append(Termino(col, op, absv))
+            b1, b2, _h = st.columns([1, 1, 2])
+            if b1.button(_("➕ Otra columna"), key=f"ag_mas_{k}"):
+                ss[kn] += 1
+                st.rerun()
+            if ss[kn] > 1 and b2.button(_("➖ Quitar la última"), key=f"ag_menos_{k}"):
+                ss[kn] -= 1
+                st.rerun()
+            # 2. agrupación
+            st.markdown(_("**Agrupar**"))
+            g1, g2 = st.columns([2, 1])
+            por_def = [c for c in (previa.agrupar_por if previa else llave) if c in cols]
+            agrupar = g1.multiselect(_("Agrupar por"), cols, default=por_def, placeholder=_("Elegí una o varias columnas"),
+                                     key=f"ag_por_{k}")
+            funcs = list(AGREGACIONES)
+            funcion = g2.selectbox(_("Función"), funcs, index=funcs.index(previa.funcion) if previa and previa.funcion in funcs else 0,
+                                   format_func=lambda x: _(AGREGACIONES[x]), key=f"ag_fn_{k}")
+            # 3. condición
+            st.markdown(_("**Condición sobre el total del grupo**"))
+            conds = list(CONDICIONES)
+            condicion = st.selectbox(_("Condición"), conds, index=conds.index(previa.condicion) if previa and previa.condicion in conds else 2,
+                                     format_func=lambda x: _(CONDICIONES[x]), key=f"ag_cond_{k}", label_visibility="collapsed")
+            categoria, umbrales, otros = None, [], "excluir"
+            if condicion == "unica":
+                u0 = previa.umbrales[0] if previa and previa.umbrales else None
+                c1, c2 = st.columns(2)
+                comp = c1.selectbox(_("El total tiene que ser"), COMPARADORES, format_func=lambda c: _(COMPARADORES_TEXTO[c]),
+                                    index=COMPARADORES.index(u0.comparador) if u0 and u0.comparador in COMPARADORES else 0, key=f"ag_uc_{k}")
+                val = c2.number_input(_("Umbral"), value=float(u0.umbral) if u0 else 0.0, step=100.0, format="%.2f", key=f"ag_uv_{k}")
+                umbrales = [Umbral(comp, val)]
+            elif condicion == "categoria":
+                cat_def = previa.categoria if previa and previa.categoria in cols else cols[0]
+                categoria = st.selectbox(_("Columna que define el umbral (por ejemplo, el tipo de documento)"), cols,
+                                         index=cols.index(cat_def), key=f"ag_cat_{k}")
+                distintos, _n = valores_distintos(firma_de(f), categoria, df[categoria])
+                ku = f"ag_nu_{k}"
+                ss.setdefault(ku, max(1, len(previa.umbrales) if previa else 2))
+                for ui in range(ss[ku]):
+                    u0 = previa.umbrales[ui] if previa and ui < len(previa.umbrales) else None
+                    c1, c2, c3 = st.columns([2, 1, 1])
+                    if distintos:
+                        vals = c1.multiselect(_("Si la columna vale"), distintos, default=[v for v in (u0.valores if u0 else []) if v in distintos],
+                                              placeholder=_("Elegí uno o varios valores"), key=f"ag_uvals_{k}_{ui}")
+                    else:
+                        texto = c1.text_input(_("Si la columna vale (separá con «;»)"), "; ".join(u0.valores) if u0 else "",
+                                              key=f"ag_uvalt_{k}_{ui}")
+                        vals = [v.strip() for v in texto.split(";") if v.strip()]
+                    comp = c2.selectbox(_("el total tiene que ser"), COMPARADORES, format_func=lambda c: _(COMPARADORES_TEXTO[c]),
+                                        index=COMPARADORES.index(u0.comparador) if u0 and u0.comparador in COMPARADORES else 0,
+                                        key=f"ag_ucomp_{k}_{ui}")
+                    val = c3.number_input(_("Umbral"), value=float(u0.umbral) if u0 else 0.0, step=100.0, format="%.2f",
+                                          key=f"ag_uval_{k}_{ui}")
+                    if vals:
+                        umbrales.append(Umbral(comp, val, vals))
+                b1, b2, _h = st.columns([1, 1, 2])
+                if b1.button(_("➕ Otro umbral"), key=f"ag_umas_{k}"):
+                    ss[ku] += 1
+                    st.rerun()
+                if ss[ku] > 1 and b2.button(_("➖ Quitar el último"), key=f"ag_umenos_{k}"):
+                    ss[ku] -= 1
+                    st.rerun()
+                ots = ["excluir", "sin_umbral"]
+                otros = st.radio(_("Filas con otros valores"), ots, horizontal=True,
+                                 index=ots.index(previa.otros) if previa and previa.otros in ots else 0,
+                                 format_func=lambda x: _("se excluyen") if x == "excluir" else _("pasan sin umbral"), key=f"ag_otros_{k}")
+            # 4. salida
+            st.markdown(_("**Resultado de la agrupación**"))
+            sals = list(SALIDAS)
+            salida = st.radio(_("Resultado"), sals, index=sals.index(previa.salida) if previa and previa.salida in sals else 0,
+                              format_func=lambda x: _(SALIDAS[x]), key=f"ag_sal_{k}", label_visibility="collapsed")
+            acompanan = "primero"
+            if salida == "resumir":
+                acs = list(ACOMPANAN)
+                acompanan = st.selectbox(_("Las demás columnas se llevan con"), acs,
+                                         index=acs.index(previa.acompanan) if previa and previa.acompanan in acs else 0,
+                                         format_func=lambda x: _(ACOMPANAN[x]), key=f"ag_acomp_{k}")
+                fuera = [c for c in llave if c not in agrupar]
+                if fuera:
+                    st.warning(_("La llave del cruce ({0}) no está entre las columnas del grupo: después de resumir, "
+                                 "cada grupo lleva un solo valor de esa columna. Agregala a «Agrupar por» o cambiá la llave.")
+                               .format(", ".join(fuera)))
+            mostrar = st.multiselect(_("Columnas que se agregan al resultado"), COLUMNAS_AUXILIARES,
+                                     default=[c for c in (previa.mostrar if previa else COLUMNAS_AUXILIARES) if c in COLUMNAS_AUXILIARES],
+                                     format_func=_, key=f"ag_most_{k}",
+                                     help=_("Se ven en el detalle de cada grupo y en el Excel; también se pueden elegir como importe a comparar."))
+            ag = Agregacion(terminos, agrupar, funcion, condicion, categoria, umbrales, otros, salida, acompanan, mostrar)
+            st.caption(_("Fórmula: {0}").format(ag.formula()) +
+                       (" · " + " · ".join(f"{', '.join(u.valores) or _('todas')}: {u.texto()}" for u in umbrales) if umbrales else ""))
+            if condicion == "categoria" and not umbrales:
+                st.warning(_("Elegí al menos un valor y su umbral."))
+        return ag
 
     from regspec.grupos import sugerir_llaves
     from regspec.llave_ml import ejemplos_de_cruce, modelo_usuario, sugerir_llaves_modelo
@@ -842,7 +964,8 @@ with tc:
                     cols = [c for c in df.columns if not c.startswith("_")]
                     s = sugeridas.get((gi, f.name))
                     if acfg is not None:  # configuración guardada: manda sobre la sugerencia
-                        faltan = [c for c in acfg.llave + acfg.traer + [x.columna for x in acfg.filtros] if c not in cols]
+                        faltan = [c for c in acfg.llave + acfg.traer + [x.columna for x in acfg.filtros] +
+                                  (acfg.agregacion.a_agregacion().columnas() if acfg.agregacion else []) if c not in cols]
                         if faltan:
                             st.warning(_("Columnas de la configuración que no están en este archivo: {0}").format(", ".join(faltan)))
                         sug = [c for c in acfg.llave if c in cols]
@@ -903,20 +1026,22 @@ with tc:
                     if st.button(_("➕ Otra condición"), key=f"masfil_{gi}_{fi}_{V}"):
                         ss[kn] += 1
                         st.rerun()
+                    agregacion = editor_agregacion(f, df, cols, llave, acfg.agregacion if acfg is not None else None,
+                                                   f"{gi}_{fi}_{V}")
                     traer = []
                     if modo_g == "base_referencia" and fi > 0:
                         opciones_t = [c for c in cols if c not in llave]
                         traer = st.multiselect(_("Columnas a traer a la base"), opciones_t, placeholder=_("Elegí una o varias columnas"),
                                                default=[c for c in (acfg.traer if acfg else []) if c in opciones_t], key=f"traer_{gi}_{fi}_{V}")
                     if llave:
-                        arch_objs.append(ArchivoGrupo(f.name, df, llave, tr, filtros, traer))
+                        arch_objs.append(ArchivoGrupo(f.name, df, llave, tr, filtros, traer, agregacion))
                         hojas_sel[(gi, len(arch_objs) - 1)] = ss.get(f"hoja_g{gi}{fi}_{V}")
                     else:
                         completo = False
             if not completo or not arch_objs:
                 grupos_ui.append(None)
                 continue
-            cols_g = sorted({c for a in arch_objs for c in a.df.columns if not c.startswith("_")} |
+            cols_g = sorted({c for a in arch_objs for c in a.columnas_resultado()} |
                             {c for a in arch_objs for c in a.traer})
             if modo_g == "concatenar" and len(arch_objs) > 1:
                 if any(columnas_distintas(arch_objs[0].df, a.df) for a in arch_objs[1:]):
@@ -957,6 +1082,10 @@ with tc:
         tol = st.number_input(_("Tolerancia en importes"), value=float(cfg.tolerancia) if cfg is not None else 0.01, min_value=0.0,
                               step=0.01, format="%.2f", key=f"tol_g_{V}")
 
+        hojas_def = [h for h in (cfg.hojas_excel if cfg is not None and cfg.hojas_excel else HOJAS_EXCEL) if h in HOJAS_EXCEL]
+        hojas_excel = st.multiselect(_("Hojas del Excel"), list(HOJAS_EXCEL), default=hojas_def, format_func=lambda h: _(HOJAS_EXCEL[h]),
+                                     key=f"hojas_xl_{V}", help=_("Se guardan con el cruce. Si no elegís ninguna, el Excel trae solo el resumen."))
+
         st.subheader(_("3 · Resultado"))
         if st.button(_("Cruzar"), type="primary"):
             grupos = [Grupo(nom, arch, modo, []) for nom, arch, modo, _ in listos]
@@ -967,15 +1096,17 @@ with tc:
                 seg_cruce = round(time.time() - t0, 2)
                 rg = ss.res_grupos
                 grande = max([len(rg.matriz), *[len(d) for d in rg.detalles.values()]]) > GRANDE
-                ss.res_excel = None if grande else rg.a_excel()  # los resultados grandes se exportan a pedido
+                ss.res_excel = None if grande else rg.a_excel(hojas_sel=hojas_excel)  # los resultados grandes se exportan a pedido
+                ss.res_excel_hojas = list(hojas_excel)
             ss.cfg_actual = ConfigCruce(
                 grupos=[GrupoCfg(nombre=nom, modo=modo, archivos=[
                     ArchivoCfg(nombre_original=a.nombre, llave=a.llave, transformacion=a.transformacion,
                                filtros=[FiltroCfg(columna=x.columna, operador=x.operador, valor=x.valor, accion=x.accion,
                                                   valores=x.valores) for x in a.filtros],
-                               traer=a.traer, hoja=hojas_sel.get((gi, ai)))
+                               traer=a.traer, hoja=hojas_sel.get((gi, ai)),
+                               agregacion=AgregacionCfg.desde(a.agregacion) if a.agregacion is not None else None)
                     for ai, a in enumerate(arch)]) for gi, (nom, arch, modo, _) in enumerate(listos)],
-                comparaciones=[list(c) for c in comparaciones], tolerancia=str(tol))
+                comparaciones=[list(c) for c in comparaciones], tolerancia=str(tol), hojas_excel=hojas_excel)
             ss.archivos_actual = [a.nombre for _, arch, _, _ in listos for a in arch]
             # aprendizaje por uso: se recuerda la configuración para esta estructura de archivos (una vez por sesión)
             try:
@@ -1042,6 +1173,16 @@ with tc:
             with st.expander(_("Estadísticas por grupo (filas, llaves, duplicados, exclusiones, lookups)")):
                 est = pd.DataFrame({g: {k: str(v) for k, v in s.items()} for g, s in r.estadisticas.items()}).fillna("–")
                 st.dataframe(_df(est), width="stretch")
+            excl = getattr(r, "excluidas", None)
+            if excl is not None and len(excl):
+                with st.expander(_("Filas excluidas: {0} (filtros y agrupaciones, con el motivo)").format(f"{len(excl):,}".replace(",", "."))):
+                    st.dataframe(_df(excl.head(MOSTRAR).astype(str).replace({"None": "", "nan": "", "<NA>": ""}), columnas_valor=("motivo",)),
+                                 hide_index=True, width="stretch")
+            tot = getattr(r, "totales", None)
+            if tot is not None and len(tot):
+                with st.expander(_("Totales por grupo: {0} grupos, {1} cumplen la condición").format(
+                        f"{len(tot):,}".replace(",", "."), f"{int((tot['cumple'] == 'sí').sum()):,}".replace(",", "."))):
+                    st.dataframe(_df(tot.head(MOSTRAR)), hide_index=True, width="stretch")
             if len(r.diferencias):
                 st.markdown(_("**Diferencias de importe**"))
                 st.dataframe(ui_estilo.tabla_continua(_df(r.diferencias)), hide_index=True, width="stretch")
@@ -1056,12 +1197,17 @@ with tc:
                       for t, d in zip(m.head(MOSTRAR)["en todos"], m.head(MOSTRAR)["con diferencias"])]
             st.dataframe(ui_estilo.tabla_continua(_df(vista), marcas, list(vista.columns).index("estado")),
                          hide_index=True, width="stretch")
+            if ss.get("res_excel") is not None and ss.get("res_excel_hojas") != list(hojas_excel):
+                grande_r = max([len(r.matriz), *[len(d) for d in r.detalles.values()]]) > GRANDE
+                ss.res_excel = None if grande_r else r.a_excel(hojas_sel=hojas_excel)
+                ss.res_excel_hojas = list(hojas_excel)
             excel = ss.get("res_excel")
             if excel is None:
                 st.caption(_("El resultado es grande: el Excel se arma a pedido (puede tardar un minuto) y cada hoja se limita a 200.000 filas."))
                 if st.button(_("Preparar Excel"), key="preparar_excel"):
                     with st.spinner(_("Armando el Excel…")):
-                        ss.res_excel = excel = r.a_excel()
+                        ss.res_excel = excel = r.a_excel(hojas_sel=hojas_excel)
+                        ss.res_excel_hojas = list(hojas_excel)
             if excel is not None:
                 st.download_button(_("Descargar resultado (Excel)"), excel, "conciliacion.xlsx")
             if st.button(_("🧹 Nueva conciliación"), key="limpiar_abajo",
@@ -1077,7 +1223,8 @@ with tc:
                     if st.button(_("Guardar"), type="primary", key="btn_guardar"):
                         if excel is None:
                             with st.spinner(_("Armando el Excel…")):
-                                ss.res_excel = excel = r.a_excel()
+                                ss.res_excel = excel = r.a_excel(hojas_sel=hojas_excel)
+                                ss.res_excel_hojas = list(hojas_excel)
                         g = almacen.guardar(nombre_c, ss.cfg_actual, r.resumen, ss.get("archivos_actual", []), excel,
                                             usuario_actual(), notas, ss.get("origen") or "heuristica", ss.get("aceptada"),
                                             ss.get("memoria_id"), *ss.get("ia_ult", (0, 0)))

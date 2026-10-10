@@ -329,6 +329,50 @@ PT: dict[str, str] = {
     "🧹 Nueva conciliación": "🧹 Nova conciliação",
     "Quita los archivos, el resultado y la configuración aplicada para empezar otra conciliación.":
         "Remove os arquivos, o resultado e a configuração aplicada para começar outra conciliação.",
+    # agrupar y filtrar por total
+    "**Agrupar**": "**Agrupar**", "**Columna calculada (por fila)**": "**Coluna calculada (por linha)**",
+    "**Condición sobre el total del grupo**": "**Condição sobre o total do grupo**",
+    "**Resultado de la agrupación**": "**Resultado do agrupamento**", "Agrupar por": "Agrupar por",
+    "Agrupar y filtrar por total": "Agrupar e filtrar por total",
+    "Calcula una columna con una fórmula, la agrupa (por ejemplo, por documento y mes) y excluye los grupos cuyo total no cumple un umbral, que puede depender de una columna.":
+        "Calcula uma coluna com uma fórmula, agrupa-a (por exemplo, por documento e mês) e exclui os grupos cujo total não cumpre um limite, que pode depender de uma coluna.",
+    "Columna que define el umbral (por ejemplo, el tipo de documento)": "Coluna que define o limite (por exemplo, o tipo de documento)",
+    "Columnas que se agregan al resultado": "Colunas que são adicionadas ao resultado", "Condición": "Condição",
+    "El total tiene que ser": "O total tem que ser", "el total tiene que ser": "o total tem que ser",
+    "Elegí al menos un valor y su umbral.": "Escolha pelo menos um valor e seu limite.",
+    "Filas con otros valores": "Linhas com outros valores",
+    "Filas excluidas: {0} (filtros y agrupaciones, con el motivo)": "Linhas excluídas: {0} (filtros e agrupamentos, com o motivo)",
+    "Función": "Função", "Fórmula: {0}": "Fórmula: {0}", "Hojas del Excel": "Planilhas do Excel",
+    "La llave del cruce ({0}) no está entre las columnas del grupo: después de resumir, cada grupo lleva un solo valor de esa columna. Agregala a «Agrupar por» o cambiá la llave.":
+        "A chave do cruzamento ({0}) não está entre as colunas do grupo: depois de resumir, cada grupo leva um único valor dessa coluna. Adicione-a em «Agrupar por» ou mude a chave.",
+    "Las demás columnas se llevan con": "As demais colunas são levadas com", "Operación": "Operação",
+    "Primera columna": "Primeira coluna",
+    "Se guardan con el cruce. Si no elegís ninguna, el Excel trae solo el resumen.":
+        "São salvas com o cruzamento. Se você não escolher nenhuma, o Excel traz só o resumo.",
+    "Se ven en el detalle de cada grupo y en el Excel; también se pueden elegir como importe a comparar.":
+        "Aparecem no detalhe de cada grupo e no Excel; também podem ser escolhidas como valor a comparar.",
+    "Si la columna vale": "Se a coluna vale", "Si la columna vale (separá con «;»)": "Se a coluna vale (separe com «;»)",
+    "Totales por grupo: {0} grupos, {1} cumplen la condición": "Totais por grupo: {0} grupos, {1} cumprem a condição",
+    "Umbral": "Limite", "en valor absoluto": "em valor absoluto", "pasan sin umbral": "passam sem limite",
+    "se excluyen": "são excluídas", "todas": "todas", "➕ Otra columna": "➕ Outra coluna", "➕ Otro umbral": "➕ Outro limite",
+    "➖ Quitar la última": "➖ Remover a última",
+    "suma": "soma", "resta": "subtrai", "multiplica por": "multiplica por", "divide por": "divide por",
+    "Suma": "Soma", "Cantidad de filas": "Quantidade de linhas", "Máximo": "Máximo", "Mínimo": "Mínimo", "Promedio": "Média",
+    "mayor que": "maior que", "mayor o igual a": "maior ou igual a", "menor que": "menor que", "menor o igual a": "menor ou igual a",
+    "Sin condición (solo agrupar)": "Sem condição (só agrupar)", "Un umbral para todas las filas": "Um limite para todas as linhas",
+    "Umbral según el valor de una columna": "Limite conforme o valor de uma coluna",
+    "Mantener las filas (se excluyen las de los grupos que no cumplen)": "Manter as linhas (excluem-se as dos grupos que não cumprem)",
+    "Resumir: una fila por grupo": "Resumir: uma linha por grupo", "primer valor": "primeiro valor", "último valor": "último valor",
+    "cantidad de valores distintos": "quantidade de valores distintos",
+    "Resumen y estadísticas por grupo": "Resumo e estatísticas por grupo", "Cruce por llave": "Cruzamento por chave",
+    "Diferencias": "Diferenças", "Detalle de cada grupo": "Detalhe de cada grupo", "Excluidos (con el motivo)": "Excluídos (com o motivo)",
+    "Totales por grupo (agregaciones)": "Totais por grupo (agregações)",
+    "valor calculado": "valor calculado", "total del grupo": "total do grupo", "umbral aplicado": "limite aplicado",
+    "categoría": "categoria", "cumple": "cumpre", "motivo": "motivo",
+    "filas del grupo": "linhas do grupo",
+    "el total del grupo no cumple el umbral": "o total do grupo não cumpre o limite",
+    "categoría sin umbral definido": "categoria sem limite definido", "división por cero": "divisão por zero",
+    "filas excluidas (filtros y agregaciones)": "linhas excluídas (filtros e agregações)",
 }
 
 # mensajes variables del núcleo (validación y resúmenes del cruce)

@@ -49,6 +49,28 @@ class Borrador:
     error: Optional[str] = None
 
 
+def archivos_del_manual(manual: str) -> list[str]:
+    """Títulos de los archivos que declara el manual («1) Padrón…» seguido de «Tipo de archivo: …»), sin IA."""
+    from ..verificador import DECL_ARCHIVO
+
+    lineas = [l.strip() for l in (manual or "").splitlines()]
+    titulos = []
+    for i, l in enumerate(lineas):
+        m = DECL_ARCHIVO.search(l)
+        if not m:
+            continue
+        t = l[:m.start()].strip(" #*:-–")
+        if not t and l.startswith("#"):  # «## Tipo de archivo: Padrón»: el título va después
+            t = l[m.end():].strip(" #*:-–")
+        j = i - 1
+        while not t and j >= 0:  # el título suele estar en la línea anterior
+            t, j = lineas[j], j - 1
+        t = re.sub(r"^\s*(?:\d+|[a-z])\s*[\)\.\-]\s*", "", t).strip(" :-–")
+        if t:
+            titulos.append(t[:80])
+    return titulos
+
+
 _REMITE = re.compile(r"ver (nota|tabla)|nota \(\d+\)|tabla de c[oó]digos|(?<![9xXvV])\(\d\)", re.I)
 
 
@@ -205,6 +227,19 @@ def borrador_por_secciones(manual: str, proveedor: Proveedor, extraer_json, max_
         esq = _llamar(proveedor, mensajes_con_contexto(contexto_esqueleto(frags), _pedido_esqueleto()),
                       "esqueleto", max_tokens, temperatura, extraer_json, b.pasos)
         avisar()
+        # varios archivos declarados en el manual: un tipo de registro por archivo, leído por código. El modelo tiende
+        # a tomar los valores de un campo «tipo de registro» (1-…, 2-…) como registros distintos.
+        titulos = archivos_del_manual(manual)
+        if len(titulos) >= 2 and len(set(titulos)) == len(titulos):
+            from ..verificador import separador_en_manual
+
+            esq["tipos_registro"] = [{"codigo": f"A{i}", "nombre": t, "min_ocurrencias": 1, "max_ocurrencias": None,
+                                      "posicion": "cualquiera", "etiqueta_xml": None} for i, t in enumerate(titulos, 1)]
+            sep = separador_en_manual(manual)
+            if sep:
+                esq.update(formato="delimitado", separador_campos=sep, longitud_registro=None)
+            b.pasos.append(PasoSeccion(f"esqueleto: {len(titulos)} archivos del manual (por código)", True, 0, 0, 0.0))
+            avisar()
         trs = esq.get("tipos_registro") or []
         if not isinstance(trs, list) or not trs:
             b.error = "el paso de esqueleto no devolvió tipos de registro"

@@ -320,6 +320,26 @@ def normalizar_decimales(d: dict) -> tuple[dict, list[str]]:
     return d, notas
 
 
+_ENUMERADOS = re.compile(r"(?<![\w.,])(\d{1,3})\s*[-–=]\s*[A-Za-zÁÉÍÓÚáéíóúÑñ]")
+
+
+def normalizar_constantes(d: dict) -> tuple[dict, list[str]]:
+    """Un campo marcado constante que no identifica a su registro, pero cuya descripción enumera valores
+    («1-Retención, 2-Informativo, 3-Excluido…»), es un dato con valores permitidos, no un valor fijo."""
+    notas = []
+    for tr in d.get("tipos_registro") or []:
+        for c in (tr.get("campos") or []) if isinstance(tr, dict) else []:
+            if not isinstance(c, dict) or c.get("tipo") != "constante" or str(c.get("valor_constante")) == str(tr.get("codigo")):
+                continue
+            valores = list(dict.fromkeys(_ENUMERADOS.findall(f"{c.get('descripcion', '')} {c.get('evidencia', '')}")))
+            if len(valores) >= 2:
+                c.update(tipo="numerico" if all(v.isdigit() for v in valores) else "alfanumerico",
+                         valores_permitidos=valores, valor_constante=None)
+                notas.append(f"{tr.get('codigo')}.{c.get('nombre')}: enumera valores ({', '.join(valores)}): "
+                             "se toma como dato con valores permitidos, no como constante.")
+    return d, notas
+
+
 def archivos_independientes(d: dict, manual: str) -> bool:
     """El manual describe varios ARCHIVOS (no varios tipos de registro de un mismo archivo): hay más de un tipo de
     registro, ninguno tiene un campo que lo identifique dentro del archivo y el manual declara más de un archivo."""
@@ -438,6 +458,8 @@ def extraer(manual: str, proveedor: Proveedor, config: Optional[ConfigExtraccion
                     res.notas.append(nota)
         if isinstance(d, dict):
             d, notas_dec = normalizar_decimales(d)
+            d, notas_const = normalizar_constantes(d)
+            notas_dec += notas_const
             res.notas += [x for x in notas_dec if x not in res.notas]
             if _separar and archivos_independientes(d, manual):
                 # varios archivos en un manual: cada uno se verifica y se corrige por separado, con las iteraciones restantes

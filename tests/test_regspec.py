@@ -306,6 +306,29 @@ def test_formato_y_archivos_anclados_en_el_manual():
     assert {"FORMATO_NO_RESPALDADO", "ARCHIVOS_DEL_MANUAL"} <= c
 
 
+def test_secciones_archivos_del_manual_por_codigo():
+    """Caso real: el esqueleto de la IA trae un registro por cada valor del campo «tipo de registro» y formato ancho
+    fijo. Con varios «Tipo de archivo» en el manual, el esqueleto sale del código: un registro por archivo,
+    delimitado; y el campo que enumera valores queda como dato con valores permitidos."""
+    from regspec.llm.secciones import archivos_del_manual
+    man = MANUAL_DOS_ARCHIVOS + "| Tipo de registro (1-Retención, 2-Informativo) | Numérico(1) | 1 |\n"
+    assert archivos_del_manual(man) == ["Padrón", "Presentación"]
+    assert all(len(archivos_del_manual(manual(i))) < 2 for i in IDS)
+    d = _dos_archivos(alicuota_longitud=4)
+    esq = {"nombre": "Ficticio", "formato": "ancho_fijo",
+           "tipos_registro": [{"codigo": "1", "nombre": "Retención"}, {"codigo": "2", "nombre": "Informativo"}]}
+    pres = d["tipos_registro"][1]["campos"] + [{
+        "nombre": "tipo_registro", "tipo": "constante", "valor_constante": "1", "longitud": 1,
+        "descripcion": "Tipo de registro (1-Retención, 2-Informativo)", "evidencia": "Tipo de registro (1-Retención, 2-Informativo)"}]
+    prov = Guionado([json.dumps(esq), json.dumps({"campos": d["tipos_registro"][0]["campos"]}),
+                     json.dumps({"campos": pres}), json.dumps({"reglas": []})])
+    r = extraer(man, prov, ConfigExtraccion(max_iteraciones=4, modo="secciones"))
+    assert r.valida and [p.spec.tipos_registro[0].nombre for p in r.partes] == ["Padrón", "Presentación"]
+    assert all(p.spec.formato == "delimitado" and p.spec.separador_campos == ";" for p in r.partes)
+    tr = r.partes[1].spec.tipos_registro[0].campo("tipo_registro")
+    assert tr.tipo == "numerico" and tr.valores_permitidos == ["1", "2"] and len(prov.recibidos) == 4
+
+
 def test_notacion_enteros_decimales():
     from regspec.llm.extractor import normalizar_decimales
     d, notas = normalizar_decimales(_dos_archivos(alicuota_longitud=2))

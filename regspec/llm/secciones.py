@@ -243,8 +243,19 @@ def borrador_por_secciones(manual: str, proveedor: Proveedor, extraer_json, max_
             b.pasos.append(PasoSeccion(f"esqueleto: {len(titulos)} archivos del manual (por código)", True, 0, 0, 0.0))
             avisar()
         trs = esq.get("tipos_registro") or []
+        if (not isinstance(trs, list) or not trs) and base_por_codigo:
+            # el modelo no listó registros pero la lectura por código sí los encontró: se parte de esos
+            trs = [{"codigo": t.get("codigo"), "nombre": t.get("nombre") or str(t.get("codigo")),
+                    "min_ocurrencias": t.get("min_ocurrencias", 1), "max_ocurrencias": t.get("max_ocurrencias"),
+                    "posicion": t.get("posicion", "cualquiera"), "etiqueta_xml": t.get("etiqueta_xml")}
+                   for t in base.get("tipos_registro", [])]
+            esq["tipos_registro"] = trs
+            b.pasos.append(PasoSeccion(f"esqueleto: {len(trs)} registros leídos por código", True, 0, 0, 0.0))
+            avisar()
         if not isinstance(trs, list) or not trs:
-            b.error = "el paso de esqueleto no devolvió tipos de registro"
+            from .extractor import SIN_REGISTROS_MSG
+
+            b.error = SIN_REGISTROS_MSG
             b.spec = esq
             return b
         for tr in trs:

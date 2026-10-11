@@ -360,6 +360,24 @@ def test_notacion_enteros_decimales_posiciones_y_un_aviso_por_campo():
     assert notas == [] and d["tipos_registro"][1]["campos"][1]["longitud"] == 4
 
 
+def test_parche_con_lista_vacia_no_borra_los_registros():
+    from regspec.llm.extractor import aplicar_parche
+    d = _dos_archivos()
+    d = {**d, "tipos_registro": d["tipos_registro"][:1]}
+    out = aplicar_parche(d, {"tipos_registro": [], "globales": {"version": "2"}})
+    assert out["tipos_registro"] == d["tipos_registro"] and out["version"] == "2"
+    # una corrección puede agregar el registro que faltaba (índice siguiente al último)
+    nuevo = {"codigo": "D", "nombre": "Presentación", "campos": []}
+    assert aplicar_parche(d, {"tipos_registro": {"1": nuevo}})["tipos_registro"][1] == nuevo
+
+
+def test_sin_registros_corta_en_la_primera_iteracion():
+    from regspec.llm.extractor import SIN_REGISTROS_MSG
+    prov = Guionado([json.dumps({"nombre": "X", "formato": "delimitado", "tipos_registro": []})])
+    r = extraer("Texto que no describe ningún archivo.", prov, ConfigExtraccion(max_iteraciones=4, modo="secciones"))
+    assert not r.valida and len(r.iteraciones) == 1 and r.error == SIN_REGISTROS_MSG and len(prov.recibidos) == 1
+
+
 def test_respaldo_por_cupo_sigue_con_otro_modelo():
     from regspec.llm.proveedores import ConRespaldo, CupoAgotado, ErrorProveedor, _duracion
 

@@ -253,16 +253,24 @@ def _fusionar_registro(viejo: dict, nuevo: dict) -> dict:
 
 
 def aplicar_parche(d: dict, parche: dict) -> dict:
-    """Aplica una corrección localizada. Si el modelo devolvió una especificación completa, la usa tal cual."""
-    if isinstance(parche.get("tipos_registro"), list):
+    """Aplica una corrección localizada. Si el modelo devolvió una especificación completa, la usa tal cual.
+    Una lista de registros vacía no es una especificación completa: los modelos chicos la devuelven para decir
+    «sin cambios en los registros», y tomarla al pie de la letra borraba todos los registros."""
+    trs_parche = parche.get("tipos_registro")
+    if isinstance(trs_parche, list) and any(isinstance(t, dict) for t in trs_parche):
         return parche
     d = copy.deepcopy(d)
     for k, v in (parche.get("globales") or {}).items():
         if k in GLOBALES:
             d[k] = v
-    for i, v in (parche.get("tipos_registro") or {}).items():
-        if str(i).isdigit() and int(i) < len(d.get("tipos_registro", [])) and isinstance(v, dict):
-            d["tipos_registro"][int(i)] = _fusionar_registro(d["tipos_registro"][int(i)], v)
+    trs = d.setdefault("tipos_registro", []) if isinstance(d.get("tipos_registro", []), list) else []
+    for i, v in (trs_parche if isinstance(trs_parche, dict) else {}).items():
+        if not (str(i).isdigit() and isinstance(v, dict)):
+            continue
+        if int(i) < len(trs):
+            trs[int(i)] = _fusionar_registro(trs[int(i)], v)
+        elif int(i) == len(trs) and v.get("codigo") is not None:  # registro que faltaba: se agrega al final
+            trs.append(v)
     reglas = list(d.get("reglas") or [])
     if isinstance(parche.get("reglas"), list):  # el modelo devolvió la lista completa de reglas
         d["reglas"] = [r for r in parche["reglas"] if isinstance(r, dict)]
@@ -421,6 +429,26 @@ def solo_un_archivo(d: dict, ref: dict) -> tuple[dict, bool]:
     return {**d, "tipos_registro": [elegido], "reglas": reglas}, True
 
 
+def registros_de_respaldo(manual: str) -> list[dict]:
+    """Registros leídos sin IA, para cuando el modelo no listó ninguno: primero los del parser por código (con sus
+    campos); si no, uno por cada archivo que declara el manual (sin campos: la corrección por registro los completa)."""
+    from ..base_sin_ia import extraer_base
+    from .secciones import archivos_del_manual
+
+    base = [t for t in extraer_base(manual).get("tipos_registro") or [] if isinstance(t, dict) and t.get("codigo")]
+    if base:
+        return copy.deepcopy(base)
+    titulos = archivos_del_manual(manual)
+    if len(titulos) >= 2 and len(set(titulos)) == len(titulos):
+        return [{"codigo": f"A{i}", "nombre": t, "min_ocurrencias": 1, "max_ocurrencias": None, "posicion": "cualquiera",
+                 "campos": []} for i, t in enumerate(titulos, 1)]
+    return []
+
+
+SIN_REGISTROS_MSG = ("no se encontró ningún tipo de registro en el manual: revisá que sea el manual técnico del archivo "
+                     "(el que describe sus campos, formatos y posiciones)")
+
+
 def extraer(manual: str, proveedor: Proveedor, config: Optional[ConfigExtraccion] = None,
             al_iterar=None, al_paso=None, inicial: Optional[dict] = None, _separar: bool = True) -> ResultadoExtraccion:
     """Convierte un manual en una especificación verificada.
@@ -458,6 +486,14 @@ def extraer(manual: str, proveedor: Proveedor, config: Optional[ConfigExtraccion
                 break
             if b.error:
                 res.error = b.error
+            if not (b.spec.get("tipos_registro") if isinstance(b.spec, dict) else None):
+                # sin registros no hay nada que corregir: seguir solo gastaría iteraciones
+                res.error = b.error or SIN_REGISTROS_MSG
+                res.iteraciones.append(Iteracion(n, False, 1, {"estructura": 1}, [res.error],
+                                                 r.tokens_entrada, r.tokens_salida, r.latencia_s))
+                if al_iterar:
+                    al_iterar(res.iteraciones[-1])
+                break
             recibido = b.spec
         else:
             try:
@@ -478,6 +514,10 @@ def extraer(manual: str, proveedor: Proveedor, config: Optional[ConfigExtraccion
                                       {"role": "user", "content": mensaje_json_invalido(str(e))}]
             continue
         d = aplicar_parche(actual, recibido) if (esperando_parche and actual is not None) else recibido
+        if (isinstance(d, dict) and isinstance(actual, dict) and actual.get("tipos_registro")
+                and not d.get("tipos_registro")):
+            # una corrección no puede dejar el archivo sin registros: se conservan los de la iteración anterior
+            d = {**d, "tipos_registro": copy.deepcopy(actual["tipos_registro"])}
         d, restauradas = proteger_reglas(actual, d, manual)
         restauradas, rest_pendientes = restauradas + rest_pendientes, []
         if isinstance(d, dict) and not _separar and inicial is not None and (inicial.get("tipos_registro") or [None])[0]:
@@ -486,6 +526,24 @@ def extraer(manual: str, proveedor: Proveedor, config: Optional[ConfigExtraccion
                 nota = "El modelo agregó registros de los otros archivos del manual: se descartaron."
                 if nota not in res.notas:
                     res.notas.append(nota)
+        if isinstance(d, dict) and not d.get("tipos_registro"):
+            # el modelo no listó ningún registro y la corrección no puede inventarlos: se parte de lo leído por
+            # código o, si el manual no describe ninguno, se corta sin gastar más iteraciones
+            respaldo = registros_de_respaldo(manual)
+            if respaldo:
+                d = {**d, "tipos_registro": respaldo}
+                nota = "El modelo no listó los registros del archivo: se tomaron los que se leyeron por código."
+                if nota not in res.notas:
+                    res.notas.append(nota)
+            else:
+                res.error = SIN_REGISTROS_MSG
+                res.spec_dict = d
+                it = Iteracion(n, False, 1, {"estructura": 1}, [SIN_REGISTROS_MSG], r.tokens_entrada, r.tokens_salida,
+                               r.latencia_s)
+                res.iteraciones.append(it)
+                if al_iterar:
+                    al_iterar(it)
+                break
         if isinstance(d, dict):
             d, notas_dec = normalizar_decimales(d)
             d, notas_const = normalizar_constantes(d)

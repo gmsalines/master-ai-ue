@@ -25,9 +25,9 @@ from .verificador import verificar
 def _leer_texto(ruta: str) -> str:
     p = Path(ruta)
     if p.suffix.lower() == ".pdf":
-        from pypdf import PdfReader
+        from .texto_pdf import texto_de_pdf
 
-        return "\n".join(pg.extract_text() or "" for pg in PdfReader(str(p)).pages)
+        return texto_de_pdf(p.read_bytes())
     return p.read_text(encoding="utf-8")
 
 

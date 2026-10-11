@@ -360,9 +360,9 @@ with t1:
         propio = st.file_uploader(_("…o subí un manual (md, txt, pdf)"), type=["md", "txt", "pdf"])
     if propio is not None:
         if propio.name.lower().endswith(".pdf"):
-            from pypdf import PdfReader
+            from regspec.texto_pdf import texto_de_pdf
 
-            ss.manual = "\n".join(p.extract_text() or "" for p in PdfReader(io.BytesIO(propio.read())).pages)
+            ss.manual = texto_de_pdf(propio.read())
         else:
             ss.manual = propio.read().decode("utf-8", errors="replace")
     elif elegido in ejemplos:
@@ -700,8 +700,8 @@ with tc:
                 man = st.file_uploader(_("Manual técnico (PDF, MD o TXT)"), type=["pdf", "md", "txt"], key=f"manual_{k}")
                 if man is not None and st.button(_("Aprender el formato"), key=f"aprender_{k}", type="primary"):
                     if man.name.lower().endswith(".pdf"):
-                        from pypdf import PdfReader
-                        texto = "\n".join(p.extract_text() or "" for p in PdfReader(io.BytesIO(man.getvalue())).pages)
+                        from regspec.texto_pdf import texto_de_pdf
+                        texto = texto_de_pdf(man.getvalue())
                     else:
                         texto = man.getvalue().decode("utf-8", errors="replace")
                     with st.status(_("Leyendo el manual…"), expanded=True) as estado:

@@ -1331,3 +1331,9 @@ def test_total_del_grupo_y_resumir_con_distinta_cantidad_de_filas():
         assert r.resumen["solo en Control"] == 1  # C no llega al umbral en el cliente
         m = r.matriz.set_index("llave")
         assert m.loc["A", "Cliente.total del grupo"] == 2500 and m.loc["A", "Cliente.cred"] == 2200
+
+
+def test_texto_de_pdf_detecta_una_palabra_por_linea():
+    from regspec.texto_pdf import _fragmentado
+    assert _fragmentado("\n".join("Tipo de Archivo: txt comprimido como zip".split() * 5))
+    assert not _fragmentado("\n".join(["1) Padrón para los Agentes:", "Tipo de Archivo: txt, campos delimitados"] * 12))

@@ -139,6 +139,25 @@ def evidencia_en_manual(evidencia: str, manual_norm: str, umbral: float = 0.85, 
 # ---------------------------------------------------------------- verificación
 
 
+DECL_ARCHIVO = re.compile(r"\b(?:tipo|nombre|formato)\s+del?\s+archivo\b", re.I)
+_SEPARADORES = [(r"puntos?\s*y\s*comas?|;", ";"), (r"tabulador(?:es)?|tabs?", "\t"),
+                (r"pipes?|barras?\s*verticales?|\|", "|"), (r"comas?|,", ",")]
+_DECL_SEPARADOR = re.compile(
+    r"campos\s*(?:\w+\s+){0,3}?(?:delimitad|separad)[a-z]*?\s*(?:por|con)\s*(?:el|la|los|las|un|una)?\s*(?:car[aá]cter(?:es)?\s*)?\W{0,3}"
+    r"(puntos?\s*y\s*comas?|tabulador(?:es)?|tabs?|pipes?|barras?\s*verticales?|comas?|[;|,])", re.I)
+
+
+def separador_en_manual(manual: str) -> Optional[str]:
+    """Separador de campos que declara el manual («campos delimitados por punto y coma»), si lo declara."""
+    m = _DECL_SEPARADOR.search(manual or "")
+    if not m:
+        return None
+    for patron, sep in _SEPARADORES:
+        if re.fullmatch(patron, m.group(1).strip(), re.I):
+            return sep
+    return None
+
+
 def _sugerencia_esquema(d: dict, loc: tuple) -> str:
     """Sugerencias deterministas para errores de forma frecuentes (sin IA)."""
     base = "Respetá exactamente los nombres y tipos del esquema JSON."
@@ -218,6 +237,25 @@ def verificar(
         err("SIN_SEPARADOR", "separador_campos", "en un archivo delimitado hay que indicar el separador de campos", etapa="estructura")
     if xml and not spec.etiqueta_raiz_xml:
         err("SIN_RAIZ", "etiqueta_raiz_xml", "en XML hay que indicar el elemento raíz", etapa="estructura")
+    # el formato también se ancla en el manual: «campos delimitados por punto y coma» -> delimitado con ";"
+    sep_manual = separador_en_manual(manual) if manual else None
+    if sep_manual and spec.formato != "delimitado":
+        err("FORMATO_NO_RESPALDADO", "formato",
+            f"el manual dice que los campos van delimitados por «{sep_manual}», pero el formato es {spec.formato}",
+            f'Usá "formato": "delimitado" y "separador_campos": "{sep_manual}" (en delimitado los campos llevan '
+            "longitud máxima y no llevan inicio ni fin).", "estructura")
+    n_archivos = len(DECL_ARCHIVO.findall(manual)) if manual else 0
+    # (con un solo tipo de registro la especificación describe uno de los archivos: es válido compilarlos por separado)
+    if n_archivos >= 2 and not xml and len(spec.tipos_registro) > 1 and len(spec.tipos_registro) != n_archivos:
+        err("ARCHIVOS_DEL_MANUAL", "tipos_registro",
+            f"el manual describe {n_archivos} archivos (secciones «Tipo de archivo») y la especificación tiene "
+            f"{len(spec.tipos_registro)} tipos de registro",
+            "Definí un tipo de registro por archivo. Un campo «tipo de registro» que enumera valores (1-…, 2-…) dentro "
+            "de una tabla es un dato del registro (valores_permitidos), no varios tipos de registro.", "estructura")
+    if sep_manual and spec.formato == "delimitado" and spec.separador_campos and spec.separador_campos != sep_manual:
+        err("SEPARADOR_NO_RESPALDADO", "separador_campos",
+            f"el manual dice que los campos van delimitados por «{sep_manual}», no por «{spec.separador_campos}»",
+            f'Usá "separador_campos": "{sep_manual}".', "estructura")
     vistos: dict[str, int] = {}
     for i, tr in enumerate(spec.tipos_registro):
         r = f"tipos_registro[{i}] ({tr.codigo})"

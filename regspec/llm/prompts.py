@@ -12,7 +12,11 @@ ser exactos.
 
 ## Modelo de la especificación
 
-- formato: "ancho_fijo" (TXT posicional) o "xml".
+- formato: "ancho_fijo" (TXT posicional), "delimitado" (campos separados por un carácter; poné separador_campos,
+  p. ej. ";", y en cada campo solo la longitud máxima, sin inicio ni fin) o "xml".
+- Si el manual describe VARIOS ARCHIVOS distintos (p. ej. varias secciones "Tipo de archivo"), cada archivo es un
+  tipo de registro. Un campo llamado "tipo de registro" que solo enumera valores (1-…, 2-…) dentro de una misma tabla
+  es un dato del registro (valores_permitidos), NO varios tipos de registro.
 - longitud_registro: largo de cada línea (solo ancho_fijo). separador_lineas: "LF" o "CRLF".
 - etiqueta_raiz_xml: elemento raíz (solo xml).
 - tipos_registro: lista en el orden del archivo. Cada uno con:
@@ -129,7 +133,8 @@ def mensaje_parche(spec: dict, registros: set, reglas: set, globales: bool, prob
     }
     frag: dict = {}
     if globales:
-        frag["globales"] = {k: spec.get(k) for k in ("nombre", "version", "formato", "longitud_registro", "separador_lineas", "etiqueta_raiz_xml")}
+        frag["globales"] = {k: spec.get(k) for k in ("nombre", "version", "formato", "longitud_registro", "separador_lineas",
+                                                     "separador_campos", "codificacion", "etiqueta_raiz_xml")}
     if registros:
         frag["tipos_registro"] = {str(i): trs[i] for i in sorted(registros) if i < len(trs)}
     if reglas:

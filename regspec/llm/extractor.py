@@ -107,7 +107,8 @@ _RX_TR = re.compile(r"^tipos_registro\[(\d+)\]")
 _RX_RG = re.compile(r"^reglas\[(\d+)\]")
 _RX_RIDS = re.compile(r"^reglas ([\w, ]+)$")
 _RX_REG = re.compile(r"^registro (\S+?)\.")
-GLOBALES = {"nombre", "version", "formato", "longitud_registro", "separador_lineas", "etiqueta_raiz_xml"}
+GLOBALES = {"nombre", "version", "formato", "longitud_registro", "separador_lineas", "separador_campos", "codificacion",
+            "etiqueta_raiz_xml"}
 
 
 def _localizar_uno(p: Problema, codigos: list, ids: list):
@@ -300,7 +301,7 @@ def proteger_reglas(anterior: Optional[dict], nuevo: dict, manual: str) -> tuple
     return nuevo, restauradas
 
 
-_DECL_ARCHIVO = re.compile(r"\b(?:tipo|nombre|formato)\s+del?\s+archivo\b", re.I)
+from ..verificador import DECL_ARCHIVO as _DECL_ARCHIVO  # noqa: E402
 
 
 def normalizar_decimales(d: dict) -> tuple[dict, list[str]]:

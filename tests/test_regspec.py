@@ -211,7 +211,7 @@ def test_json_invalido_se_reintenta():
 
 MANUAL_DOS_ARCHIVOS = """# Especificación ficticia de dos archivos
 
-Ambos archivos son de texto, delimitados por punto y coma (;), con un registro por línea (CR+LF).
+Ambos archivos son de texto, con un registro por línea (CR+LF). Los campos van delimitados por punto y coma (;).
 
 ## Tipo de archivo: Padrón
 
@@ -287,6 +287,23 @@ def test_sanear_ocurrencias_y_campos_como_texto():
     d["tipos_registro"][0]["campos"][1] = "letra"
     ver = verificar(d, MANUAL_DOS_ARCHIVOS)
     assert any("se recibió \"letra\"" in p.sugerencia for p in ver.errores)
+
+
+def test_formato_y_archivos_anclados_en_el_manual():
+    """Caso real: el modelo leyó un manual delimitado como ancho fijo y tomó los valores del campo «tipo de registro»
+    (1-Retención, 2-Informativo, …) como tipos de registro distintos. El verificador lo detecta con el manual."""
+    from regspec.verificador import separador_en_manual
+    assert separador_en_manual(MANUAL_DOS_ARCHIVOS) == ";"
+    assert separador_en_manual("registros separados por salto de línea; importes con decimales separados por coma") is None
+    assert all(separador_en_manual(manual(i)) is None for i in IDS)
+    d = _dos_archivos(alicuota_longitud=4)
+    assert not {"FORMATO_NO_RESPALDADO", "ARCHIVOS_DEL_MANUAL"} & codigos(verificar(d, MANUAL_DOS_ARCHIVOS))
+    malo = copy.deepcopy(d)
+    malo["formato"], malo["longitud_registro"] = "ancho_fijo", 30
+    variante = copy.deepcopy(malo["tipos_registro"][1])  # «tipo de registro» 1, 2, 3 leído como tres registros
+    malo["tipos_registro"] = [{**copy.deepcopy(variante), "codigo": str(k)} for k in (1, 2, 3)]
+    c = codigos(verificar(malo, MANUAL_DOS_ARCHIVOS))
+    assert {"FORMATO_NO_RESPALDADO", "ARCHIVOS_DEL_MANUAL"} <= c
 
 
 def test_notacion_enteros_decimales():

@@ -89,10 +89,13 @@ def contexto_esqueleto(frags, presupuesto: int = 2500) -> str:
 def _pedido_esqueleto() -> str:
     return (
         "Extraé SOLO los datos globales y la lista de tipos de registro, SIN campos ni reglas:\n"
-        '{"nombre": "..", "version": "..", "formato": "ancho_fijo|xml", "longitud_registro": n|null, '
-        '"separador_lineas": "LF|CRLF", "etiqueta_raiz_xml": "..|null", '
+        '{"nombre": "..", "version": "..", "formato": "ancho_fijo|delimitado|xml", "longitud_registro": n|null, '
+        '"separador_lineas": "LF|CRLF", "separador_campos": ";|,|..|null", "etiqueta_raiz_xml": "..|null", '
         '"tipos_registro": [{"codigo": "..", "nombre": "..", "min_ocurrencias": n, "max_ocurrencias": n|null, '
-        '"posicion": "primero|ultimo|cualquiera", "etiqueta_xml": "..|null"}]}'
+        '"posicion": "primero|ultimo|cualquiera", "etiqueta_xml": "..|null"}]}\n'
+        "Un tipo de registro es una tabla de campos distinta. Si el manual describe varios archivos (p. ej. varias "
+        "secciones «Tipo de archivo»), cada archivo es un tipo de registro. Un campo «tipo de registro» que solo enumera "
+        "valores dentro de una misma tabla es un dato, no varios tipos de registro."
     )
 
 
@@ -102,6 +105,8 @@ def _pedido_campos(esq: dict, tr: dict) -> str:
         f"Formato {esq.get('formato')}, longitud de registro {esq.get('longitud_registro')}. "
         f"Extraé TODOS los campos del registro \"{tr.get('codigo')}\" ({tr.get('nombre')}), en orden. "
         + ("Cada campo lleva etiqueta_xml exacta; sin inicio ni fin. " if xml else
+           "Archivo delimitado: cada campo lleva solo su longitud máxima, sin inicio ni fin. "
+           if esq.get("formato") == "delimitado" else
            "Cada campo lleva inicio y longitud; incluí rellenos y el identificador constante. ")
         + 'Respondé {"campos": [ ... ]}'
     )

@@ -11,6 +11,7 @@ import pytest
 from regspec.archivos import escribir, generar_xsd, leer, validar_xsd
 from regspec.base_sin_ia import extraer_base
 from regspec.dsl import Especificacion
+from regspec.dsl import _sanear as _sanear_dsl
 from regspec.evaluacion.metricas import metricas_estructurales, metricas_funcionales
 from regspec.evaluacion.mutaciones import construir_bateria
 from regspec.expr import ContextoArchivo, ErrorExpresion, Evaluador, verificar_regla
@@ -256,6 +257,36 @@ def test_manual_con_varios_archivos_se_compila_por_separado():
     assert len(prov.recibidos) == 1  # separar y verificar no gasta más llamadas al modelo
     assert [i.numero for i in r.iteraciones] == sorted({i.numero for i in r.iteraciones})  # numeración continua
     assert any("archivos distintos" in n for n in r.notas) and r.traza()["partes"][1]["valida"]
+
+
+def test_un_archivo_no_recupera_los_otros():
+    """Al corregir un archivo, el modelo devuelve también los registros de los otros (con errores de forma):
+    se descartan y el archivo queda válido."""
+    d = _dos_archivos(alicuota_longitud=4)
+    malo = copy.deepcopy(d)
+    malo["tipos_registro"][1]["campos"][2]["evidencia"] = "Monto que no figura en el manual"
+    corregido = copy.deepcopy(d)
+    corregido["tipos_registro"][0]["min_ocurrencias"] = None
+    corregido["tipos_registro"][0]["campos"].append("monto_sujeto Numérico(18,2)")
+    corregido["tipos_registro"].append({"codigo": "X", "nombre": "Otro", "min_ocurrencias": None, "campos": ["x"]})
+    prov = Guionado([json.dumps(malo), json.dumps(corregido)])
+    r = extraer(MANUAL_DOS_ARCHIVOS, prov, ConfigExtraccion(max_iteraciones=4, modo="completo"))
+    assert r.valida and [len(p.spec.tipos_registro) for p in r.partes] == [1, 1]
+    assert r.partes[1].spec.tipos_registro[0].codigo == "D"
+    assert any("se descartaron" in n for n in r.notas)
+
+
+def test_sanear_ocurrencias_y_campos_como_texto():
+    d = _dos_archivos(alicuota_longitud=4)
+    d["tipos_registro"][0]["min_ocurrencias"] = None
+    d["tipos_registro"][0]["max_ocurrencias"] = "N"
+    d["tipos_registro"][0]["campos"][1] = json.dumps(d["tipos_registro"][0]["campos"][1])
+    sp = Especificacion.model_validate(_sanear_dsl(d))
+    assert sp.tipos_registro[0].min_ocurrencias == 1 and sp.tipos_registro[0].max_ocurrencias is None
+    assert sp.tipos_registro[0].campos[1].nombre == "letra_alicuota"
+    d["tipos_registro"][0]["campos"][1] = "letra"
+    ver = verificar(d, MANUAL_DOS_ARCHIVOS)
+    assert any("se recibió \"letra\"" in p.sugerencia for p in ver.errores)
 
 
 def test_notacion_enteros_decimales():

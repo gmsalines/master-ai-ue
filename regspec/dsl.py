@@ -226,6 +226,19 @@ def _entero(v):
     return v
 
 
+def _objeto(v):
+    """Un campo que llegó como texto JSON ('{"nombre": ...}') se convierte en objeto."""
+    if isinstance(v, str) and v.strip().startswith("{"):
+        try:
+            import json
+
+            x = json.loads(v)
+            return x if isinstance(x, dict) else v
+        except ValueError:
+            return v
+    return v
+
+
 def _sanear(d: dict) -> dict:
     """Normalización determinística de tipos (sin IA): "12" -> 12, version numérica -> texto,
     reglas sin id o sin descripción. No cambia el contenido, solo la forma."""
@@ -240,11 +253,16 @@ def _sanear(d: dict) -> dict:
     for tr in d.get("tipos_registro") or []:
         if isinstance(tr, dict):
             tr = {**tr, **{k: _entero(tr[k]) for k in _ENTEROS_REG if k in tr}}
+            # min_ocurrencias vacío o no numérico ("N", "varios"): se usa el valor por defecto
+            if "min_ocurrencias" in tr and not isinstance(tr["min_ocurrencias"], int):
+                tr.pop("min_ocurrencias")
+            if isinstance(tr.get("max_ocurrencias"), str):  # "N", "n", "*", "ilimitado" -> sin límite
+                tr["max_ocurrencias"] = None
             if isinstance(tr.get("codigo"), (int, float)):
                 tr["codigo"] = str(tr["codigo"])
             if isinstance(tr.get("campos"), list):
                 tr["campos"] = [{**c, **{k: _entero(c[k]) for k in _ENTEROS_CAMPO if k in c}} if isinstance(c, dict) else c
-                                for c in tr["campos"]]
+                                for c in (_objeto(x) for x in tr["campos"])]
         trs.append(tr)
     if "tipos_registro" in d:
         d["tipos_registro"] = trs

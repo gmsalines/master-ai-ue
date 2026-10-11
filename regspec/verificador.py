@@ -19,6 +19,7 @@ Etapas:
 """
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 from dataclasses import asdict, dataclass
@@ -142,6 +143,13 @@ def _sugerencia_esquema(d: dict, loc: tuple) -> str:
     """Sugerencias deterministas para errores de forma frecuentes (sin IA)."""
     base = "Respetá exactamente los nombres y tipos del esquema JSON."
     try:
+        if len(loc) == 4 and loc[0] == "tipos_registro" and loc[2] == "campos":
+            v = d["tipos_registro"][loc[1]]["campos"][loc[3]]
+            if not isinstance(v, dict):
+                return (f"Cada campo debe ser un objeto {{\"nombre\": ..., \"tipo\": ..., ...}}; se recibió {json.dumps(v, ensure_ascii=False)[:120]}. "
+                        "Reemplazalo por el objeto completo del campo o eliminalo si no está en el manual.")
+        if len(loc) == 3 and loc[0] == "tipos_registro" and loc[2] in ("min_ocurrencias", "max_ocurrencias"):
+            return "Debe ser un número entero (max_ocurrencias puede ser null = sin límite)."
         if len(loc) == 5 and loc[0] == "tipos_registro" and loc[2] == "campos" and loc[4] in ("inicio", "longitud"):
             campos = d["tipos_registro"][loc[1]]["campos"]
             j = loc[3]

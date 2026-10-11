@@ -342,6 +342,36 @@ def separar_archivos(d: dict) -> list[dict]:
     return partes
 
 
+def solo_un_archivo(d: dict, ref: dict) -> tuple[dict, bool]:
+    """Compilando un archivo de un manual con varios: el modelo, que ve el manual entero, a veces devuelve también los
+    registros de los otros archivos. Se conserva solo el registro de este archivo (por código, nombre o campos) y sus
+    reglas. Devuelve (especificación, si se descartó algo)."""
+    trs = [t for t in d.get("tipos_registro") or [] if isinstance(t, dict)]
+    if len(trs) <= 1 and len(trs) == len(d.get("tipos_registro") or []):
+        return d, False
+    nombres_ref = {c.get("nombre") for c in ref.get("campos") or [] if isinstance(c, dict)}
+
+    def afinidad(t):
+        nombres = {c.get("nombre") for c in t.get("campos") or [] if isinstance(c, dict)}
+        return (str(t.get("codigo")) == str(ref.get("codigo")), t.get("nombre") == ref.get("nombre"),
+                len(nombres & nombres_ref))
+    if not trs:
+        return d, False
+    elegido = max(trs, key=afinidad)
+    if afinidad(elegido) == (False, False, 0):
+        return d, False
+    otros = {str(t.get("codigo")) for t in trs if t is not elegido} - {str(elegido.get("codigo"))}
+
+    def propia(r):
+        if not isinstance(r, dict):
+            return False
+        if r.get("ambito") == "registro":
+            return str(r.get("tipo_registro")) == str(elegido.get("codigo"))
+        return not any(f'"{c}"' in str(r.get("expresion", "")) for c in otros)
+    reglas = [r for r in d.get("reglas") or [] if propia(r)]
+    return {**d, "tipos_registro": [elegido], "reglas": reglas}, True
+
+
 def extraer(manual: str, proveedor: Proveedor, config: Optional[ConfigExtraccion] = None,
             al_iterar=None, al_paso=None, inicial: Optional[dict] = None, _separar: bool = True) -> ResultadoExtraccion:
     """Convierte un manual en una especificación verificada.
@@ -399,6 +429,12 @@ def extraer(manual: str, proveedor: Proveedor, config: Optional[ConfigExtraccion
         d = aplicar_parche(actual, recibido) if (esperando_parche and actual is not None) else recibido
         d, restauradas = proteger_reglas(actual, d, manual)
         restauradas, rest_pendientes = restauradas + rest_pendientes, []
+        if isinstance(d, dict) and not _separar and inicial is not None and (inicial.get("tipos_registro") or [None])[0]:
+            d, recortada = solo_un_archivo(d, inicial["tipos_registro"][0])
+            if recortada and n > 1:
+                nota = "El modelo agregó registros de los otros archivos del manual: se descartaron."
+                if nota not in res.notas:
+                    res.notas.append(nota)
         if isinstance(d, dict):
             d, notas_dec = normalizar_decimales(d)
             res.notas += [x for x in notas_dec if x not in res.notas]

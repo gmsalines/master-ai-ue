@@ -145,6 +145,8 @@ def _main(argv=None) -> int:
             print(f"caché: {prov.aciertos} respuestas reutilizadas ({prov.tokens_ahorrados} tokens ahorrados)", file=sys.stderr)
         if r.error:
             print("error:", r.error, file=sys.stderr)
+        if r.cupo_agotado:
+            print("(con --modelo podés usar otro modelo, que tiene su propio cupo)", file=sys.stderr)
         if r.spec_dict is not None:
             _salida(json.dumps(r.spec_dict, ensure_ascii=False, indent=2), a.salida)
         print(f"especificación {'VÁLIDA' if r.valida else 'CON ERRORES'} en {len(r.iteraciones)} iteraciones", file=sys.stderr)

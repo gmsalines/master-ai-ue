@@ -43,6 +43,20 @@ class ErrorProveedor(RuntimeError):
         self.cuerpo = cuerpo
 
 
+class CupoAgotado(ErrorProveedor):
+    """El plan del proveedor agotó el cupo diario de este modelo: no es un error del método, y reintentar
+    no sirve hasta que se libere. Con `ConRespaldo` se sigue con otro modelo."""
+
+
+def _duracion(segundos: float) -> str:
+    """960 min -> «16 h»; 75 min -> «1 h 15 min»; 9 min -> «9 min»."""
+    minutos = max(1, round(segundos / 60))
+    h, m = divmod(minutos, 60)
+    if not h:
+        return f"{m} min"
+    return f"{h} h" + (f" {m} min" if m else "")
+
+
 def _post(url: str, cuerpo: dict, headers: dict, reintentos: int = 8, timeout: int = 240) -> dict:
     datos = json.dumps(cuerpo).encode()
     espera = 5.0
@@ -72,9 +86,9 @@ def _post(url: str, cuerpo: dict, headers: dict, reintentos: int = 8, timeout: i
                 espera_msg = sum(float(v) * {"h": 3600, "m": 60, "s": 1}[u] for v, u in partes)
                 espera_srv = max(espera_srv or 0, espera_msg)
             if e.code == 429 and espera_srv and espera_srv > 120:
-                cuando = f" Se libera en {m.group(1).rstrip('.')}." if m else ""
-                raise ErrorProveedor(f"se agotó el límite diario de tokens del plan para este modelo.{cuando} "
-                                     "Podés esperar o usar otro modelo con --modelo (cada modelo tiene su propio cupo).", cuerpo_err)
+                cuando = f" Se libera en {_duracion(espera_srv)}." if m else ""
+                raise CupoAgotado(f"se agotó el límite diario de tokens del plan para este modelo.{cuando} "
+                                  "Podés esperar o elegir otro modelo (cada modelo tiene su propio cupo).", cuerpo_err)
             if e.code in (429, 500, 502, 503, 529) and not demasiado_grande and intento < reintentos - 1:
                 pausa = espera_srv if espera_srv else espera
                 time.sleep(min(max(pausa, 1.0), 90.0))
@@ -187,3 +201,48 @@ def crear_proveedor(nombre: str, modelo: Optional[str] = None) -> Proveedor:
         extra.setdefault("reasoning", {"effort": "low"})
         extra.pop("reasoning_effort", None)
     return OpenAICompatible(modelo=modelo, base_url=url, api_key=clave, nombre=nombre, extra=extra)
+
+
+@dataclass
+class ConRespaldo:
+    """Usa el primer proveedor de la lista y, si agota su cupo diario (`CupoAgotado`), sigue con el siguiente
+    desde el mismo punto. Cada cambio queda registrado en `cambios` para informarlo: una extracción que mezcla
+    modelos tiene que decirlo. Si se agotan todos, se propaga el último `CupoAgotado`."""
+
+    proveedores: list
+    cambios: list = field(default_factory=list)
+    _i: int = 0
+
+    @property
+    def actual(self):
+        return self.proveedores[self._i]
+
+    @property
+    def nombre(self) -> str:
+        return getattr(self.actual, "nombre", "")
+
+    @property
+    def modelo(self) -> str:
+        return getattr(self.actual, "modelo", "")
+
+    @property
+    def etiqueta(self) -> str:
+        """«groq/gpt-oss-120b», para informar el cambio."""
+        return f"{self.nombre}/{self.modelo.split('/')[-1]}"
+
+    def con_cache(self, usar: bool = True) -> "ConRespaldo":
+        """La misma cadena con caché por modelo (la caché va dentro: cada respuesta se guarda con el modelo que la dio)."""
+        from .cache import ProveedorConCache
+
+        return ConRespaldo([p if hasattr(p, "aciertos") else ProveedorConCache(p, usar=usar) for p in self.proveedores])
+
+    def completar(self, mensajes, modo_json=True, temperatura=0.0, max_tokens=8000) -> Respuesta:
+        while True:
+            try:
+                return self.actual.completar(mensajes, modo_json=modo_json, temperatura=temperatura, max_tokens=max_tokens)
+            except CupoAgotado:
+                if self._i + 1 >= len(self.proveedores):
+                    raise
+                anterior = self.etiqueta
+                self._i += 1
+                self.cambios.append((anterior, self.etiqueta))

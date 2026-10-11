@@ -340,6 +340,55 @@ def test_notacion_enteros_decimales():
     assert normalizar_decimales(_dos_archivos(alicuota_longitud=4))[1] == []
 
 
+def test_notacion_enteros_decimales_posiciones_y_un_aviso_por_campo():
+    import copy
+    from regspec.llm.extractor import normalizar_decimales
+    base = _dos_archivos(alicuota_longitud=2)
+    # el mismo campo en tres registros: un solo aviso que nombra los tres
+    tres = copy.deepcopy(base)
+    tres["tipos_registro"] = [{**copy.deepcopy(base["tipos_registro"][1]), "codigo": k} for k in ("2", "3", "5")]
+    _d, notas = normalizar_decimales(tres)
+    assert len(notas) == 1 and "registros 2, 3 y 5" in notas[0]
+    # con Desde/Hasta deciden las posiciones y no hace falta avisar
+    ancho_total = copy.deepcopy(base)
+    ancho_total["tipos_registro"][1]["campos"][1].update(inicio=12, fin=13)  # 2 posiciones: la longitud ya era la total
+    d, notas = normalizar_decimales(ancho_total)
+    assert notas == [] and d["tipos_registro"][1]["campos"][1]["longitud"] == 2
+    ancho_ext = copy.deepcopy(base)
+    ancho_ext["tipos_registro"][1]["campos"][1].update(inicio=12, fin=15)  # 4 posiciones: 2 enteros + 2 decimales
+    d, notas = normalizar_decimales(ancho_ext)
+    assert notas == [] and d["tipos_registro"][1]["campos"][1]["longitud"] == 4
+
+
+def test_respaldo_por_cupo_sigue_con_otro_modelo():
+    from regspec.llm.proveedores import ConRespaldo, CupoAgotado, ErrorProveedor, _duracion
+
+    class Agotado:
+        nombre, modelo = "groq", "openai/gpt-oss-120b"
+
+        def completar(self, *a, **k):
+            raise CupoAgotado("se agotó el límite diario de tokens del plan para este modelo.")
+
+    respaldo = Guionado(['{"ok": 1}'], modelo="openai/gpt-oss-20b", nombre="groq")
+    cadena = ConRespaldo([Agotado(), respaldo])
+    assert cadena.completar([{"role": "user", "content": "x"}]).texto == '{"ok": 1}'
+    assert cadena.cambios == [("groq/gpt-oss-120b", "groq/gpt-oss-20b")] and cadena.modelo == "openai/gpt-oss-20b"
+    # todos agotados: se propaga y la extracción queda marcada como interrumpida por cupo (no como fallo del método)
+    r = extraer(manual("m1_retenciones"), ConRespaldo([Agotado()]), ConfigExtraccion(max_iteraciones=2, modo="completo"))
+    assert r.cupo_agotado and not r.valida and "límite diario" in r.error
+    # otros errores del proveedor no cambian de modelo
+    class Caido(Agotado):
+        def completar(self, *a, **k):
+            raise ErrorProveedor("HTTP 500")
+    otra = ConRespaldo([Caido(), Guionado(['{}'])])
+    try:
+        otra.completar([{"role": "user", "content": "x"}])
+        assert False
+    except ErrorProveedor as e:
+        assert not isinstance(e, CupoAgotado) and otra.cambios == []
+    assert _duracion(960 * 60) == "16 h" and _duracion(75 * 60) == "1 h 15 min" and _duracion(9 * 60) == "9 min"
+
+
 # ------------------------------------------------------------------ evaluación
 
 

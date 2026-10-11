@@ -25,7 +25,7 @@ from typing import Callable, Optional
 
 from ..base_sin_ia import extraer_base
 from .prompts import SISTEMA_BREVE
-from .proveedores import ErrorProveedor, Proveedor
+from .proveedores import CupoAgotado, ErrorProveedor, Proveedor
 from .recuperacion import (
     TERMINOS_ESQUELETO, TERMINOS_NOTAS, TERMINOS_REGLAS, dividir, indice_de_titulos, patron_registro, seleccionar,
     seleccionar_indices, unir,
@@ -47,6 +47,7 @@ class Borrador:
     spec: Optional[dict]
     pasos: list[PasoSeccion] = field(default_factory=list)
     error: Optional[str] = None
+    cupo_agotado: bool = False
 
 
 def archivos_del_manual(manual: str) -> list[str]:
@@ -279,6 +280,7 @@ def borrador_por_secciones(manual: str, proveedor: Proveedor, extraer_json, max_
         b.spec = esq
     except ErrorProveedor as e:
         b.error = str(e)
+        b.cupo_agotado = isinstance(e, CupoAgotado)
     except ValueError as e:
         b.error = str(e)
     return b

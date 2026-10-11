@@ -11,6 +11,18 @@ import re
 IDIOMAS = {"es": "Español", "pt": "Português"}
 
 PT: dict[str, str] = {
+    # cupo del proveedor y resultado de la extracción
+    '1 iteración': '1 iteração',
+    '{0} iteraciones': '{0} iterações',
+    '{0} tokens': '{0} tokens',
+    'Interrumpida por cupo': 'Interrompida por cota',
+    'Si se agota el cupo, seguir con otro modelo': 'Se a cota acabar, continuar com outro modelo',
+    'Orden: {0}. La parte ya hecha no se vuelve a pagar (caché) y el resultado avisa del cambio.': 'Ordem: {0}. A parte já feita não é paga de novo (cache) e o resultado avisa da troca.',
+    'Se agotó el cupo diario de {0}: la extracción siguió con {1} desde donde había quedado.': 'A cota diária de {0} acabou: a extração continuou com {1} a partir de onde tinha parado.',
+    'La extracción se cortó porque el proveedor agotó el cupo diario: la especificación quedó a medio corregir. Volvé a compilar cuando se libere o con otro modelo; la parte ya hecha queda guardada y no vuelve a gastar tokens.': 'A extração foi interrompida porque o provedor esgotou a cota diária: a especificação ficou corrigida pela metade. Compile de novo quando a cota for liberada ou com outro modelo; a parte já feita fica salva e não gasta tokens de novo.',
+    'Notas de interpretación ({0}): decisiones del sistema para revisar contra el manual': 'Notas de interpretação ({0}): decisões do sistema para revisar com o manual',
+    'No se guardó en la biblioteca: {0}. La corrección no llegó a terminar por el cupo del modelo; conviene volver a compilar antes de guardarla.': 'Não foi salva na biblioteca: {0}. A correção não chegou a terminar por causa da cota do modelo; convém compilar de novo antes de salvá-la.',
+
     "Sugerida por el modelo de llave, que aprende de los cruces que confirmás.": "Sugerida pelo modelo de chave, que aprende com os cruzamentos que você confirma.",
     "No se pudo actualizar el modelo de llave": "Não foi possível atualizar o modelo de chave",
     # encabezado y barra lateral

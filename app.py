@@ -45,7 +45,7 @@ from regspec.base_sin_ia import extraer_base
 from regspec.dsl import Especificacion
 from regspec.generador import generar, registros_desde_tabla
 from regspec.llm.extractor import ConfigExtraccion, extraer
-from regspec.llm.proveedores import PRESETS, Anthropic, OpenAICompatible
+from regspec.llm.proveedores import PRESETS, Anthropic, ConRespaldo, OpenAICompatible
 from regspec.sintetico import generar_registros
 from regspec.validador import validar
 from regspec.verificador import verificar
@@ -194,6 +194,23 @@ with st.sidebar:
             else:
                 extra = {"reasoning_effort": "low"} if ("gpt-oss" in modelo and opcion == "groq") else {}
                 proveedor = OpenAICompatible(modelo=modelo, base_url=PRESETS[opcion][0], api_key=clave, nombre=opcion, extra=extra)
+                # cada modelo de Groq tiene su propio cupo diario: si el elegido se agota, se sigue con el otro y,
+                # si hay clave de OpenRouter (crédito prepago, que hace de tope de gasto), con gpt-oss-120b allí
+                if opcion == "groq":
+                    otro = {"openai/gpt-oss-120b": "openai/gpt-oss-20b", "openai/gpt-oss-20b": "openai/gpt-oss-120b"}.get(modelo)
+                    cadena = [proveedor]
+                    if otro:
+                        cadena.append(OpenAICompatible(modelo=otro, base_url=PRESETS["groq"][0], api_key=clave, nombre="groq", extra=extra))
+                    clave_or = os.environ.get("OPENROUTER_API_KEY", "") or _secreto("OPENROUTER_API_KEY")
+                    if clave_or:
+                        cadena.append(OpenAICompatible(modelo="openai/gpt-oss-120b", base_url=PRESETS["openrouter"][0],
+                                                       api_key=clave_or, nombre="openrouter"))
+                    respaldo = len(cadena) > 1 and (not ver_config or st.checkbox(
+                        _("Si se agota el cupo, seguir con otro modelo"), value=True,
+                        help=_("Orden: {0}. La parte ya hecha no se vuelve a pagar (caché) y el resultado avisa del cambio.").format(
+                            " → ".join(f"{p.nombre}/{p.modelo.split('/')[-1]}" for p in cadena))))
+                    if respaldo:
+                        proveedor = ConRespaldo(cadena)
         if ver_config:
             max_it = st.slider(_("Máximo de iteraciones de autocorrección"), 1, 6, 4)
             usar_cache = st.checkbox(_("Reutilizar respuestas guardadas (no gasta tokens al repetir)"), value=True)
@@ -214,6 +231,29 @@ st.markdown(ui_estilo.encabezado(
       "Si un formato es nuevo, el sistema lo aprende de su manual técnico."),
     _("Prototipo · Trabajo Fin de Máster")), unsafe_allow_html=True)
 BIBLIO = RAIZ / "especificaciones"
+
+
+def con_cache(prov):
+    """Proveedor con caché; con respaldo, cada modelo de la cadena tiene la suya."""
+    from regspec.llm.cache import ProveedorConCache
+
+    return prov.con_cache(usar_cache) if isinstance(prov, ConRespaldo) else ProveedorConCache(prov, usar=usar_cache)
+
+
+def avisar_respaldo(prov, r, donde=st) -> None:
+    """Informa el cambio de modelo por cupo, o cómo seguir si se cortó."""
+    for antes, despues in getattr(prov, "cambios", []):
+        donde.info(_("Se agotó el cupo diario de {0}: la extracción siguió con {1} desde donde había quedado.").format(antes, despues))
+    if r is not None and r.cupo_agotado:
+        donde.warning(_("La extracción se cortó porque el proveedor agotó el cupo diario: la especificación quedó a medio "
+                        "corregir. Volvé a compilar cuando se libere o con otro modelo; la parte ya hecha queda guardada "
+                        "y no vuelve a gastar tokens."))
+        if r.error:
+            donde.caption(r.error)
+
+
+def n_es(n: int) -> str:
+    return f"{n:,}".replace(",", ".")
 
 
 def guardar_en_biblioteca(spec: Especificacion, nombre: str) -> str:
@@ -358,16 +398,17 @@ with t1:
                     zona.write(_("{0} Paso **{1}** ({2}, {3:.0f} s)").format(icono, p.nombre, costo, p.latencia_s)
                                + ("" if p.ok else f" — {p.detalle}"))
 
-                from regspec.llm.cache import ProveedorConCache
-
-                proveedor = ProveedorConCache(proveedor, usar=usar_cache)
-                r = extraer(ss.manual, proveedor, ConfigExtraccion(max_iteraciones=max_it, modo=modo),
+                prov_ext = con_cache(proveedor)
+                r = extraer(ss.manual, prov_ext, ConfigExtraccion(max_iteraciones=max_it, modo=modo),
                             al_iterar=al_iterar, al_paso=al_paso)
-            if r.error:
+            if r.error and not r.cupo_agotado:
                 st.error(r.error)
+            avisar_respaldo(prov_ext, r)
             ss.spec = r.spec
-            for nota in r.notas:
-                st.info(nota)
+            if r.notas:
+                with st.expander(_("Notas de interpretación ({0}): decisiones del sistema para revisar contra el manual").format(len(r.notas))):
+                    for nota in r.notas:
+                        st.write("- " + nota)
             # un manual puede describir varios archivos: cada formato se guarda por separado si quedó válido
             ss.sin_guardar = []
             for parte in (r.partes or [r]):
@@ -377,17 +418,26 @@ with t1:
                     st.success(_("Guardada en la biblioteca como '{0}': desde ahora el sistema reconoce este formato al cruzar archivos.").format(guardar_en_biblioteca(parte.spec, parte.spec.nombre)))
                 else:
                     ss.sin_guardar.append(parte.spec)
+            ss.sin_guardar_cupo = r.cupo_agotado
             if r.spec is not None:
-                detalle = _("{0} iteraciones · {1} tokens").format(len(r.iteraciones), r.tokens)
+                n_it = len(r.iteraciones)
+                detalle = (_("1 iteración") if n_it == 1 else _("{0} iteraciones").format(n_it)) + " · " + \
+                    _("{0} tokens").format(n_es(r.tokens))
                 if r.partes:
                     detalle = _("{0} formatos ({1} válidos)").format(len(r.partes), sum(p.valida for p in r.partes)) + " · " + detalle
-                st.metric(_("Resultado"), _("Válida") if r.valida else _("Con errores"), detalle)
+                estado_txt = _("Válida") if r.valida else (_("Interrumpida por cupo") if r.cupo_agotado else _("Con errores"))
+                st.metric(_("Resultado"), estado_txt)
+                st.caption(detalle)
 
     # especificaciones con errores: no se guardan solas, pero el usuario puede guardarlas igual (queda advertido)
     if ss.get("sin_guardar"):
         with st.container(border=True):
-            st.warning(_("No se guardó en la biblioteca: {0}. El verificador encontró errores; revisalos en «Especificación».").format(
-                ", ".join(f"'{x.nombre}'" for x in ss.sin_guardar)))
+            nombres_sg = ", ".join(f"'{x.nombre}'" for x in ss.sin_guardar)
+            if ss.get("sin_guardar_cupo"):
+                st.warning(_("No se guardó en la biblioteca: {0}. La corrección no llegó a terminar por el cupo del modelo; "
+                             "conviene volver a compilar antes de guardarla.").format(nombres_sg))
+            else:
+                st.warning(_("No se guardó en la biblioteca: {0}. El verificador encontró errores; revisalos en «Especificación».").format(nombres_sg))
             if st.button(_("Guardar igual en la biblioteca")):
                 from regspec.llm.extractor import archivos_independientes, normalizar_decimales, separar_archivos
 
@@ -660,14 +710,16 @@ with tc:
                             ver = verificar(d, texto)
                             spec_nueva, valida = ver.spec, ver.valida
                         else:
-                            r = extraer(texto, ProveedorConCache(proveedor, usar=usar_cache),
+                            prov_ext = con_cache(proveedor)
+                            r = extraer(texto, prov_ext,
                                         ConfigExtraccion(max_iteraciones=max_it, modo=modo),
                                         al_paso=lambda p: estado.write(f"{'✔' if p.ok else '✖'} {p.nombre}"),
                                         al_iterar=lambda it: estado.write(
                                             _("verificación: OK") if it.errores == 0 else _("verificación: {0} errores → corrigiendo").format(it.errores)))
                             spec_nueva, valida = r.spec, r.valida
-                            if r.error:
+                            if r.error and not r.cupo_agotado:
                                 st.error(r.error)
+                            avisar_respaldo(prov_ext, r)
                         if spec_nueva is not None and valida:
                             nombre = guardar_en_biblioteca(spec_nueva, spec_nueva.nombre)
                             estado.update(label=_("Formato aprendido y guardado como '{0}'").format(nombre), state="complete")

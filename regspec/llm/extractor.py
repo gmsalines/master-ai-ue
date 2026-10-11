@@ -15,7 +15,7 @@ from typing import Optional
 from ..dsl import Campo, Especificacion, Regla, TipoRegistro
 from ..verificador import Problema, ResultadoVerificacion, verificar
 from .prompts import mensaje_correccion, mensaje_json_invalido, mensaje_parche, mensajes_iniciales
-from .proveedores import ErrorProveedor, Proveedor, Respuesta
+from .proveedores import CupoAgotado, ErrorProveedor, Proveedor, Respuesta
 from .recuperacion import dividir
 from .secciones import borrador_por_secciones, contexto_esqueleto, contexto_registro, contexto_reglas, mensajes_con_contexto
 
@@ -63,6 +63,8 @@ class ResultadoExtraccion:
     # manual que describe varios archivos: una extracción (y su verificación) por archivo
     partes: list = field(default_factory=list)
     notas: list = field(default_factory=list)
+    # se cortó porque el proveedor agotó el cupo diario: la especificación quedó a medio corregir (no es un fallo del método)
+    cupo_agotado: bool = False
 
     @property
     def tokens(self) -> int:
@@ -74,6 +76,7 @@ class ResultadoExtraccion:
 
     def traza(self) -> dict:
         return {"valida": self.valida, "modelo": self.modelo, "error": self.error, "tokens": self.tokens,
+                "cupo_agotado": self.cupo_agotado,
                 "reglas_restauradas": self.reglas_restauradas,
                 "latencia_s": round(self.latencia_s, 2), "iteraciones": [asdict(i) for i in self.iteraciones],
                 "notas": self.notas, "partes": [{"nombre": p.spec.nombre if p.spec else None, "valida": p.valida}
@@ -306,17 +309,29 @@ from ..verificador import DECL_ARCHIVO as _DECL_ARCHIVO  # noqa: E402
 
 def normalizar_decimales(d: dict) -> tuple[dict, list[str]]:
     """Notación «Numérico(n,d)» de muchos manuales: n enteros y d decimales. Si un campo decimal quedó con tantos o más
-    decimales que su longitud (imposible: la longitud incluye los decimales), se toma la longitud como n + d."""
-    notas = []
+    decimales que su longitud, se toma la longitud como n + d. Cuando el manual da Desde/Hasta, deciden las posiciones:
+    si el ancho es n, la longitud ya era la total y no se toca; si es n + d, se confirma sin aviso. Solo se avisa
+    cuando no hay posiciones para comprobarlo, una vez por campo aunque se repita en varios registros."""
+    avisos: dict[tuple, list[str]] = {}
     for tr in d.get("tipos_registro") or []:
         for c in (tr.get("campos") or []) if isinstance(tr, dict) else []:
             if not isinstance(c, dict) or c.get("tipo") != "decimal":
                 continue
             lg, dec = c.get("longitud"), c.get("decimales") or 0
-            if isinstance(lg, int) and isinstance(dec, int) and 0 < lg <= dec:
-                c["longitud"] = lg + dec
-                notas.append(f"{tr.get('codigo')}.{c.get('nombre')}: «({lg},{dec})» se tomó como {lg} enteros + {dec} decimales "
-                             f"(longitud {lg + dec}).")
+            if not (isinstance(lg, int) and isinstance(dec, int) and 0 < lg <= dec):
+                continue
+            ini, fin = c.get("inicio"), c.get("fin")
+            ancho = fin - ini + 1 if isinstance(ini, int) and isinstance(fin, int) and fin >= ini else None
+            if ancho == lg:  # las posiciones dicen que la longitud ya incluía los decimales
+                continue
+            c["longitud"] = lg + dec
+            if ancho != lg + dec:  # sin posiciones (o que no cierran): interpretación a revisar
+                avisos.setdefault((str(c.get("nombre")), lg, dec), []).append(str(tr.get("codigo")))
+    notas = []
+    for (nombre, lg, dec), regs in avisos.items():
+        donde = f"registro {regs[0]}" if len(regs) == 1 else "registros " + ", ".join(regs[:-1]) + f" y {regs[-1]}"
+        notas.append(f"{nombre} ({donde}): «({lg},{dec})» se tomó como {lg} enteros + {dec} decimales "
+                     f"(longitud {lg + dec}). Revisalo contra el manual.")
     return d, notas
 
 
@@ -435,6 +450,7 @@ def extraer(manual: str, proveedor: Proveedor, config: Optional[ConfigExtraccion
                                        usar_codigo=cfg.usar_codigo)
             r = Respuesta("", sum(p.tokens_entrada for p in b.pasos), sum(p.tokens_salida for p in b.pasos),
                           sum(p.latencia_s for p in b.pasos), getattr(proveedor, "modelo", ""))
+            res.cupo_agotado = b.cupo_agotado
             if b.spec is None:
                 res.error = b.error
                 res.iteraciones.append(Iteracion(n, False, 1, {"secciones": 1}, [b.error or "falló la extracción por secciones"],
@@ -448,6 +464,7 @@ def extraer(manual: str, proveedor: Proveedor, config: Optional[ConfigExtraccion
                 r = proveedor.completar(mensajes, modo_json=True, temperatura=cfg.temperatura, max_tokens=cfg.tokens_por_llamada)
             except ErrorProveedor as e:
                 res.error = str(e)
+                res.cupo_agotado = isinstance(e, CupoAgotado)
                 break
             recibido = None
         try:
@@ -496,8 +513,9 @@ def extraer(manual: str, proveedor: Proveedor, config: Optional[ConfigExtraccion
                 res.valida = len(validas) == len(res.partes)
                 elegida = (validas or res.partes)[0]
                 res.spec, res.spec_dict = elegida.spec, elegida.spec_dict
-                errores = [x.error for x in res.partes if x.error]
+                errores = list(dict.fromkeys(x.error for x in res.partes if x.error))
                 res.error = "; ".join(errores) if errores and not res.valida else None
+                res.cupo_agotado = res.cupo_agotado or any(x.cupo_agotado for x in res.partes)
                 return res
 
         # Retroalimentación: se usa la configuración de la condición (para los estudios de ablación)
@@ -552,6 +570,7 @@ def extraer(manual: str, proveedor: Proveedor, config: Optional[ConfigExtraccion
                         continue  # parche ilegible: ese lote queda sin corregir y el verificador lo volverá a señalar
             except ErrorProveedor as e:
                 res.error = str(e)
+                res.cupo_agotado = isinstance(e, CupoAgotado)
                 break
             nuevo, rest_lote = proteger_reglas(d, nuevo, manual)
             rest_pendientes = rest_lote

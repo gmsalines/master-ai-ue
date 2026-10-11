@@ -349,13 +349,26 @@ def archivos_independientes(d: dict, manual: str) -> bool:
     def identificado(tr):
         return any(isinstance(c, dict) and c.get("tipo") == "constante" and str(c.get("valor_constante")) == str(tr.get("codigo"))
                    for c in tr.get("campos") or [])
-    return not any(identificado(t) for t in trs) and len(_DECL_ARCHIVO.findall(manual)) >= 2
+    if not any(identificado(t) for t in trs) and len(_DECL_ARCHIVO.findall(manual)) >= 2:
+        return True
+    # los registros son exactamente los archivos que declara el manual (esqueleto armado por código): aunque el
+    # modelo les haya agregado un «identificador», son archivos distintos
+    from .secciones import archivos_del_manual
+
+    titulos = archivos_del_manual(manual)
+    return len(titulos) >= 2 and sorted(str(t.get("nombre")) for t in trs) == sorted(titulos)
 
 
-def separar_archivos(d: dict) -> list[dict]:
-    """Una especificación por tipo de registro, con los atributos de archivo comunes y las reglas de ese registro."""
+def separar_archivos(d: dict, manual: str = "") -> list[dict]:
+    """Una especificación por tipo de registro, con los atributos de archivo comunes y las reglas de ese registro.
+    Si el modelo agregó un campo «identificador» con un código que no figura en el manual, se quita: en un archivo
+    con un solo tipo de registro no hay nada que identificar."""
     partes = []
     for tr in d.get("tipos_registro") or []:
+        cod = str(tr.get("codigo"))
+        if manual and not re.search(rf"(?<!\w){re.escape(cod)}(?!\w)", manual):
+            tr = {**tr, "campos": [c for c in tr.get("campos") or [] if not (
+                isinstance(c, dict) and c.get("tipo") == "constante" and str(c.get("valor_constante")) == cod)]}
         reglas = [r for r in d.get("reglas") or [] if isinstance(r, dict) and r.get("ambito") == "registro"
                   and str(r.get("tipo_registro")) == str(tr.get("codigo"))]
         nombre = f"{d.get('nombre') or 'Especificación'} · {tr.get('nombre') or tr.get('codigo')}"
@@ -468,7 +481,7 @@ def extraer(manual: str, proveedor: Proveedor, config: Optional[ConfigExtraccion
                     res.iteraciones.append(Iteracion(n, True, 0, {}, ["borrador con varios archivos: se separa"],
                                                      r.tokens_entrada, r.tokens_salida, r.latencia_s))
                 restantes = ConfigExtraccion(**{**cfg.__dict__, "max_iteraciones": max(1, n_iter - n + 1)})
-                for parte in separar_archivos(d):
+                for parte in separar_archivos(d, manual):
                     desde = len(res.iteraciones)
 
                     def numerar(it, desde=desde):  # numeración continua entre archivos

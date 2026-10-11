@@ -319,7 +319,9 @@ def test_secciones_archivos_del_manual_por_codigo():
            "tipos_registro": [{"codigo": "1", "nombre": "Retención"}, {"codigo": "2", "nombre": "Informativo"}]}
     pres = d["tipos_registro"][1]["campos"] + [{
         "nombre": "tipo_registro", "tipo": "constante", "valor_constante": "1", "longitud": 1,
-        "descripcion": "Tipo de registro (1-Retención, 2-Informativo)", "evidencia": "Tipo de registro (1-Retención, 2-Informativo)"}]
+        "descripcion": "Tipo de registro (1-Retención, 2-Informativo)", "evidencia": "Tipo de registro (1-Retención, 2-Informativo)"},
+        {"nombre": "id_registro", "tipo": "constante", "valor_constante": "A2", "longitud": 2,  # inventado por el modelo
+         "evidencia": "Identificador del contribuyente"}]
     prov = Guionado([json.dumps(esq), json.dumps({"campos": d["tipos_registro"][0]["campos"]}),
                      json.dumps({"campos": pres}), json.dumps({"reglas": []})])
     r = extraer(man, prov, ConfigExtraccion(max_iteraciones=4, modo="secciones"))
@@ -327,6 +329,7 @@ def test_secciones_archivos_del_manual_por_codigo():
     assert all(p.spec.formato == "delimitado" and p.spec.separador_campos == ";" for p in r.partes)
     tr = r.partes[1].spec.tipos_registro[0].campo("tipo_registro")
     assert tr.tipo == "numerico" and tr.valores_permitidos == ["1", "2"] and len(prov.recibidos) == 4
+    assert r.partes[1].spec.tipos_registro[0].campo("id_registro") is None
 
 
 def test_notacion_enteros_decimales():

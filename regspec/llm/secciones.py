@@ -127,7 +127,8 @@ def _pedido_campos(esq: dict, tr: dict) -> str:
         f"Formato {esq.get('formato')}, longitud de registro {esq.get('longitud_registro')}. "
         f"Extraé TODOS los campos del registro \"{tr.get('codigo')}\" ({tr.get('nombre')}), en orden. "
         + ("Cada campo lleva etiqueta_xml exacta; sin inicio ni fin. " if xml else
-           "Archivo delimitado: cada campo lleva solo su longitud máxima, sin inicio ni fin. "
+           "Archivo delimitado: cada campo lleva solo su longitud máxima, sin inicio ni fin. No agregues campos que "
+           "no estén en la tabla (tampoco un identificador del registro). "
            if esq.get("formato") == "delimitado" else
            "Cada campo lleva inicio y longitud; incluí rellenos y el identificador constante. ")
         + 'Respondé {"campos": [ ... ]}'

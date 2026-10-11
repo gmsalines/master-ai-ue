@@ -82,11 +82,32 @@ def mensajes_con_contexto(fragmentos_texto: str, pedido: str) -> list[dict]:
     ]
 
 
+_OTRO_TITULO = re.compile(r"^\s*(?:\d+|[a-z])\)\s+\S")
+
+
+def _seccion_completa(frags, idx: list[int], presupuesto: int) -> list[int]:
+    """Si el fragmento elegido es solo el título del registro (texto de PDF con una línea en blanco entre filas),
+    se le suman los fragmentos que siguen hasta el título siguiente («2) …») o hasta el presupuesto: la tabla de
+    campos queda en el contexto en lugar de quedar afuera."""
+    if len(idx) != 1 or len(frags[idx[0]].completo) >= 400:
+        return idx
+    out, total, j = list(idx), len(frags[idx[0]].completo), idx[0] + 1
+    while j < len(frags) and total + len(frags[j].completo) <= presupuesto:
+        primera = next((l for l in frags[j].texto.splitlines() if l.strip()), "")
+        if _OTRO_TITULO.match(primera):
+            break
+        out.append(j)
+        total += len(frags[j].completo)
+        j += 1
+    return out
+
+
 def contexto_registro(frags, tr: dict, presupuesto: int = 4000) -> str:
     """La sección del propio registro y, si remite a notas o tablas de códigos, esas notas."""
     pats = patron_registro(tr.get("codigo", ""), tr.get("nombre", ""))
     idx = seleccionar_indices(frags, [str(tr.get("codigo", "")), str(tr.get("nombre", ""))], presupuesto,
                               patrones=pats, max_fragmentos=1)
+    idx = _seccion_completa(frags, idx, presupuesto)
     propio = unir(frags, idx)
     if _REMITE.search(propio):
         titulos_notas = [f.indice for f in frags if re.search(r"^notas?\b|tabla|c[oó]digos|anexo|referencias", f.titulo, re.I)]

@@ -1362,3 +1362,13 @@ def test_metodo_de_texto_sugiere_patron_y_regla_descartable():
     antes = {"reglas": [{"id": "R1", "expresion": "x", "evidencia": "El primer carácter es siempre cero."}]}
     assert proteger_reglas(antes, {"reglas": []}, manual)[1] == ["R1"]  # se restaura
     assert proteger_reglas(antes, {"reglas": []}, manual, frozenset({"R1"}))[1] == []  # tras dos intentos, se deja ir
+
+
+def test_contexto_del_registro_incluye_su_tabla_aunque_el_pdf_separe_las_filas():
+    from regspec.llm.recuperacion import dividir
+    from regspec.llm.secciones import contexto_registro
+    texto = ("1)  Padrón ficticio:\n\nTipo de Archivo: txt, campos delimitados por punto y coma.\n\n"
+             "   1     Identificador del contribuyente    Numérico(11)\n\n   2     Letra de alícuota    Char(1)\n\n"
+             "2)  Presentación ficticia:\n\n   1     Monto retenido    Numérico(18,2)\n")
+    ctx = contexto_registro(dividir(texto), {"codigo": "A1", "nombre": "Padrón ficticio"})
+    assert "Letra de alícuota" in ctx and "Monto retenido" not in ctx

@@ -208,6 +208,64 @@ def test_json_invalido_se_reintenta():
     assert r.valida and not r.iteraciones[0].json_valido
 
 
+MANUAL_DOS_ARCHIVOS = """# Especificación ficticia de dos archivos
+
+Ambos archivos son de texto, delimitados por punto y coma (;), con un registro por línea (CR+LF).
+
+## Tipo de archivo: Padrón
+
+| Campo | Formato | Ejemplo |
+|---|---|---|
+| Identificador del contribuyente | Numérico(11) | 30100100106 |
+| Letra de alícuota | Char(1) | A |
+
+## Tipo de archivo: Presentación
+
+| Campo | Formato | Ejemplo |
+|---|---|---|
+| Identificador del contribuyente | Numérico(11) | 30100100106 |
+| Alícuota aplicada | Numérico(2,2) | 2.5 |
+| Monto retenido | Numérico(18,2) | 383.04 |
+"""
+
+
+def _dos_archivos(alicuota_longitud=2):
+    def c(n, t, lg, ev, dec=0):
+        return {"nombre": n, "tipo": t, "longitud": lg, "evidencia": ev, **({"decimales": dec} if dec else {})}
+    return {"nombre": "Ficticio", "formato": "delimitado", "separador_campos": ";", "separador_lineas": "CRLF",
+            "tipos_registro": [
+                {"codigo": "P", "nombre": "Padrón", "max_ocurrencias": None, "campos": [
+                    c("identificador", "numerico", 11, "Identificador del contribuyente | Numérico(11)"),
+                    c("letra_alicuota", "alfanumerico", 1, "Letra de alícuota | Char(1)")]},
+                {"codigo": "D", "nombre": "Presentación", "max_ocurrencias": None, "campos": [
+                    c("identificador", "numerico", 11, "Identificador del contribuyente | Numérico(11)"),
+                    c("alicuota", "decimal", alicuota_longitud, "Alícuota aplicada | Numérico(2,2)", 2),
+                    c("monto_retenido", "decimal", 18, "Monto retenido | Numérico(18,2)", 2)]}]}
+
+
+def test_manual_con_varios_archivos_se_compila_por_separado():
+    from regspec.llm.extractor import archivos_independientes
+    d = _dos_archivos()
+    assert not verificar(d, MANUAL_DOS_ARCHIVOS).valida  # junto: falta un campo que identifique cada registro
+    assert archivos_independientes(d, MANUAL_DOS_ARCHIVOS)
+    assert not archivos_independientes(gold("m1_retenciones"), manual("m1_retenciones"))  # un archivo, varios registros
+    prov = Guionado([json.dumps(d)])
+    r = extraer(MANUAL_DOS_ARCHIVOS, prov, ConfigExtraccion(max_iteraciones=4, modo="completo"))
+    assert r.valida and len(r.partes) == 2 and all(p.valida for p in r.partes)
+    assert [p.spec.nombre for p in r.partes] == ["Ficticio · Padrón", "Ficticio · Presentación"]
+    assert len(prov.recibidos) == 1  # separar y verificar no gasta más llamadas al modelo
+    assert [i.numero for i in r.iteraciones] == sorted({i.numero for i in r.iteraciones})  # numeración continua
+    assert any("archivos distintos" in n for n in r.notas) and r.traza()["partes"][1]["valida"]
+
+
+def test_notacion_enteros_decimales():
+    from regspec.llm.extractor import normalizar_decimales
+    d, notas = normalizar_decimales(_dos_archivos(alicuota_longitud=2))
+    campos = {c["nombre"]: c for c in d["tipos_registro"][1]["campos"]}
+    assert campos["alicuota"]["longitud"] == 4 and campos["monto_retenido"]["longitud"] == 18 and len(notas) == 1
+    assert normalizar_decimales(_dos_archivos(alicuota_longitud=4))[1] == []
+
+
 # ------------------------------------------------------------------ evaluación
 
 

@@ -73,7 +73,7 @@ biblioteca/         formatos reales cargados a mano (sin datos): se reconocen so
 ejemplos/           CSV para generar un informe; par sistema.csv / presentado.txt; ejemplos/grupos/ para la conciliación por grupos
 resultados/         salidas de las evaluaciones (detalle.csv y resumen.md por corrida; no se versiona)
 docs/               notas y migraciones SQL
-tests/              91 tests
+tests/              93 tests
 app.py              app en Streamlit
 ```
 
@@ -82,7 +82,7 @@ app.py              app en Streamlit
 ```bash
 python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-python -m pytest                                      # 91 tests
+python -m pytest                                      # 93 tests
 ```
 
 La clave del proveedor va en un archivo `.env` en la raíz, que no se versiona. En Streamlit Cloud va en *Secrets* (ver más abajo).
@@ -131,6 +131,10 @@ Medición con `gpt-oss-20b` en Groq (tokens totales por extracción):
 **Anclaje de atributos.** Además de exigir evidencia literal, el verificador comprueba otras tres cosas. Primero, que la máscara de fecha coincida con la citada en la evidencia. Segundo, que cada valor permitido aparezca en el manual. Tercero, que los ejemplos XML del propio manual resulten válidos con la especificación. Si la evidencia citada no se encuentra, sugiere el fragmento más parecido del manual.
 
 **Corrección localizada.** Cuando el verificador puede ubicar los errores (en qué registro o en qué regla están), el modelo no recibe la especificación completa de nuevo. Recibe solo los fragmentos con problemas y un índice del resto, y devuelve un parche. Así cada iteración consume menos tokens y no se modifica lo que ya estaba bien.
+
+**Manuales con varios archivos.** Algunos manuales describen más de un archivo (por ejemplo, un padrón que se descarga y una declaración que se presenta), cada uno con un solo tipo de registro y sin un campo que diga de qué registro se trata. Juntos en una especificación, el verificador los rechaza porque no hay forma de distinguir los registros. Si el borrador tiene varios tipos de registro sin identificador y el manual declara más de un archivo, el sistema separa el borrador en una especificación por archivo y verifica y corrige cada una por su cuenta, con las iteraciones que quedan. En la app, cada formato que queda válido se guarda en la biblioteca.
+
+**Notación (enteros,decimales).** Muchos manuales escriben los importes como `Numérico(18,2)` o `(2,2)`: enteros y decimales. Si un campo decimal queda con tantos decimales como longitud (por ejemplo, longitud 2 con 2 decimales), el sistema toma la longitud como enteros + decimales y lo informa.
 
 Proveedores soportados: `groq`, `openai`, `openrouter`, `ollama` (local, sin clave) y `anthropic`. Todos pasan por la misma interfaz, así que cambiar de modelo no toca el extractor. Esto mitiga la dependencia de un proveedor externo.
 

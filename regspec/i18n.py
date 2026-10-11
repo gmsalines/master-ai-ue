@@ -91,6 +91,8 @@ PT: dict[str, str] = {
     "Válida": "Válida",
     "Con errores": "Com erros",
     "{0} iteraciones · {1} tokens": "{0} iterações · {1} tokens",
+    "'{0}' quedó con errores: no se guardó en la biblioteca.": "'{0}' ficou com erros: não foi salva na biblioteca.",
+    "{0} formatos ({1} válidos)": "{0} formatos ({1} válidos)",
     # especificación
     "Primero compilá un manual o cargá una especificación.": "Primeiro compile um manual ou carregue uma especificação.",
     "Formato": "Formato",

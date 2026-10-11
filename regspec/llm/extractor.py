@@ -60,6 +60,9 @@ class ResultadoExtraccion:
     error: Optional[str] = None
     modelo: str = ""
     reglas_restauradas: list = field(default_factory=list)
+    # manual que describe varios archivos: una extracción (y su verificación) por archivo
+    partes: list = field(default_factory=list)
+    notas: list = field(default_factory=list)
 
     @property
     def tokens(self) -> int:
@@ -72,7 +75,9 @@ class ResultadoExtraccion:
     def traza(self) -> dict:
         return {"valida": self.valida, "modelo": self.modelo, "error": self.error, "tokens": self.tokens,
                 "reglas_restauradas": self.reglas_restauradas,
-                "latencia_s": round(self.latencia_s, 2), "iteraciones": [asdict(i) for i in self.iteraciones]}
+                "latencia_s": round(self.latencia_s, 2), "iteraciones": [asdict(i) for i in self.iteraciones],
+                "notas": self.notas, "partes": [{"nombre": p.spec.nombre if p.spec else None, "valida": p.valida}
+                                                for p in self.partes]}
 
 
 def extraer_json(texto: str) -> dict:
@@ -295,8 +300,50 @@ def proteger_reglas(anterior: Optional[dict], nuevo: dict, manual: str) -> tuple
     return nuevo, restauradas
 
 
+_DECL_ARCHIVO = re.compile(r"\b(?:tipo|nombre|formato)\s+del?\s+archivo\b", re.I)
+
+
+def normalizar_decimales(d: dict) -> tuple[dict, list[str]]:
+    """Notación «Numérico(n,d)» de muchos manuales: n enteros y d decimales. Si un campo decimal quedó con tantos o más
+    decimales que su longitud (imposible: la longitud incluye los decimales), se toma la longitud como n + d."""
+    notas = []
+    for tr in d.get("tipos_registro") or []:
+        for c in (tr.get("campos") or []) if isinstance(tr, dict) else []:
+            if not isinstance(c, dict) or c.get("tipo") != "decimal":
+                continue
+            lg, dec = c.get("longitud"), c.get("decimales") or 0
+            if isinstance(lg, int) and isinstance(dec, int) and 0 < lg <= dec:
+                c["longitud"] = lg + dec
+                notas.append(f"{tr.get('codigo')}.{c.get('nombre')}: «({lg},{dec})» se tomó como {lg} enteros + {dec} decimales "
+                             f"(longitud {lg + dec}).")
+    return d, notas
+
+
+def archivos_independientes(d: dict, manual: str) -> bool:
+    """El manual describe varios ARCHIVOS (no varios tipos de registro de un mismo archivo): hay más de un tipo de
+    registro, ninguno tiene un campo que lo identifique dentro del archivo y el manual declara más de un archivo."""
+    trs = [t for t in (d.get("tipos_registro") or []) if isinstance(t, dict)]
+    if len(trs) < 2 or d.get("formato") == "xml":
+        return False
+    def identificado(tr):
+        return any(isinstance(c, dict) and c.get("tipo") == "constante" and str(c.get("valor_constante")) == str(tr.get("codigo"))
+                   for c in tr.get("campos") or [])
+    return not any(identificado(t) for t in trs) and len(_DECL_ARCHIVO.findall(manual)) >= 2
+
+
+def separar_archivos(d: dict) -> list[dict]:
+    """Una especificación por tipo de registro, con los atributos de archivo comunes y las reglas de ese registro."""
+    partes = []
+    for tr in d.get("tipos_registro") or []:
+        reglas = [r for r in d.get("reglas") or [] if isinstance(r, dict) and r.get("ambito") == "registro"
+                  and str(r.get("tipo_registro")) == str(tr.get("codigo"))]
+        nombre = f"{d.get('nombre') or 'Especificación'} · {tr.get('nombre') or tr.get('codigo')}"
+        partes.append({**d, "nombre": nombre[:120], "tipos_registro": [tr], "reglas": reglas})
+    return partes
+
+
 def extraer(manual: str, proveedor: Proveedor, config: Optional[ConfigExtraccion] = None,
-            al_iterar=None, al_paso=None) -> ResultadoExtraccion:
+            al_iterar=None, al_paso=None, inicial: Optional[dict] = None, _separar: bool = True) -> ResultadoExtraccion:
     """Convierte un manual en una especificación verificada.
 
     `al_iterar(iteracion)` y `al_paso(paso)` son callbacks opcionales para mostrar el progreso.
@@ -313,7 +360,9 @@ def extraer(manual: str, proveedor: Proveedor, config: Optional[ConfigExtraccion
     rest_pendientes: list[str] = []
 
     for n in range(1, n_iter + 1):
-        if corregida is not None:
+        if n == 1 and inicial is not None:  # se continúa desde una especificación ya armada (p. ej. un archivo de varios)
+            recibido, r = inicial, Respuesta("", 0, 0, 0.0, getattr(proveedor, "modelo", ""))
+        elif corregida is not None:
             recibido, r = corregida
             corregida = None
             esperando_parche = False
@@ -350,6 +399,34 @@ def extraer(manual: str, proveedor: Proveedor, config: Optional[ConfigExtraccion
         d = aplicar_parche(actual, recibido) if (esperando_parche and actual is not None) else recibido
         d, restauradas = proteger_reglas(actual, d, manual)
         restauradas, rest_pendientes = restauradas + rest_pendientes, []
+        if isinstance(d, dict):
+            d, notas_dec = normalizar_decimales(d)
+            res.notas += [x for x in notas_dec if x not in res.notas]
+            if _separar and archivos_independientes(d, manual):
+                # varios archivos en un manual: cada uno se verifica y se corrige por separado, con las iteraciones restantes
+                res.notas.append(f"El manual describe {len(d['tipos_registro'])} archivos distintos: se compiló cada uno por separado.")
+                if r.tokens_entrada or r.tokens_salida:
+                    res.iteraciones.append(Iteracion(n, True, 0, {}, ["borrador con varios archivos: se separa"],
+                                                     r.tokens_entrada, r.tokens_salida, r.latencia_s))
+                restantes = ConfigExtraccion(**{**cfg.__dict__, "max_iteraciones": max(1, n_iter - n + 1)})
+                for parte in separar_archivos(d):
+                    desde = len(res.iteraciones)
+
+                    def numerar(it, desde=desde):  # numeración continua entre archivos
+                        it.numero += desde
+                        if al_iterar:
+                            al_iterar(it)
+                    sub = extraer(manual, proveedor, restantes, numerar, al_paso, inicial=parte, _separar=False)
+                    res.partes.append(sub)
+                    res.iteraciones += sub.iteraciones
+                    res.notas += [x for x in sub.notas if x not in res.notas]
+                validas = [x for x in res.partes if x.valida]
+                res.valida = len(validas) == len(res.partes)
+                elegida = (validas or res.partes)[0]
+                res.spec, res.spec_dict = elegida.spec, elegida.spec_dict
+                errores = [x.error for x in res.partes if x.error]
+                res.error = "; ".join(errores) if errores and not res.valida else None
+                return res
 
         # Retroalimentación: se usa la configuración de la condición (para los estudios de ablación)
         ver: ResultadoVerificacion = verificar(

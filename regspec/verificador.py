@@ -232,7 +232,9 @@ def verificar(
             if c is None:
                 err("SIN_IDENTIFICADOR", f"tipos_registro[{i}] ({tr.codigo})",
                     f"ningún campo constante tiene valor_constante igual al código '{tr.codigo}'",
-                    "El campo 'tipo de registro' debe ser tipo constante con valor_constante = codigo del registro.", "estructura")
+                    "El campo 'tipo de registro' debe ser tipo constante con valor_constante = codigo del registro. "
+                    "Si el manual describe archivos distintos (cada uno con un solo tipo de registro y sin un campo que lo "
+                    "identifique), describí cada archivo por separado.", "estructura")
             else:
                 ids.append((tr.codigo, c.inicio, c.longitud) if ancho_fijo else (tr.codigo, tr.campos.index(c), 0))
         if len({(a, b) for _, a, b in ids}) > 1:

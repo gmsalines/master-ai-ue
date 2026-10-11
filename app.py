@@ -219,7 +219,9 @@ BIBLIO = RAIZ / "especificaciones"
 def guardar_en_biblioteca(spec: Especificacion, nombre: str) -> str:
     import re as _re
     BIBLIO.mkdir(exist_ok=True)
-    slug = _re.sub(r"[^a-z0-9]+", "_", nombre.lower()).strip("_")[:50] or "especificacion"
+    import unicodedata as _ud
+    plano = _ud.normalize("NFKD", nombre.lower()).encode("ascii", "ignore").decode()  # «Padrón» -> «padron»
+    slug = _re.sub(r"[^a-z0-9]+", "_", plano).strip("_")[:50] or "especificacion"
     (BIBLIO / f"{slug}.json").write_text(spec.model_dump_json(indent=2), encoding="utf-8")
     alm = globals().get("almacen")
     if alm is not None and alm.remoto:  # en la nube el disco no persiste: el formato queda en la cuenta del usuario
@@ -364,11 +366,21 @@ with t1:
             if r.error:
                 st.error(r.error)
             ss.spec = r.spec
-            if r.spec is not None and r.valida:
-                st.success(_("Guardada en la biblioteca como '{0}': desde ahora el sistema reconoce este formato al cruzar archivos.").format(guardar_en_biblioteca(r.spec, r.spec.nombre)))
+            for nota in r.notas:
+                st.info(nota)
+            # un manual puede describir varios archivos: cada formato se guarda por separado si quedó válido
+            for parte in (r.partes or [r]):
+                if parte.spec is None:
+                    continue
+                if parte.valida:
+                    st.success(_("Guardada en la biblioteca como '{0}': desde ahora el sistema reconoce este formato al cruzar archivos.").format(guardar_en_biblioteca(parte.spec, parte.spec.nombre)))
+                elif r.partes:
+                    st.warning(_("'{0}' quedó con errores: no se guardó en la biblioteca.").format(parte.spec.nombre))
             if r.spec is not None:
-                st.metric(_("Resultado"), _("Válida") if r.valida else _("Con errores"),
-                          _("{0} iteraciones · {1} tokens").format(len(r.iteraciones), r.tokens))
+                detalle = _("{0} iteraciones · {1} tokens").format(len(r.iteraciones), r.tokens)
+                if r.partes:
+                    detalle = _("{0} formatos ({1} válidos)").format(len(r.partes), sum(p.valida for p in r.partes)) + " · " + detalle
+                st.metric(_("Resultado"), _("Válida") if r.valida else _("Con errores"), detalle)
 
 # ---------------------------------------------------------------- 2. especificación
 with t2:

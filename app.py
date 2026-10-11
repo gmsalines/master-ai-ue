@@ -369,18 +369,40 @@ with t1:
             for nota in r.notas:
                 st.info(nota)
             # un manual puede describir varios archivos: cada formato se guarda por separado si quedó válido
+            ss.sin_guardar = []
             for parte in (r.partes or [r]):
                 if parte.spec is None:
                     continue
                 if parte.valida:
                     st.success(_("Guardada en la biblioteca como '{0}': desde ahora el sistema reconoce este formato al cruzar archivos.").format(guardar_en_biblioteca(parte.spec, parte.spec.nombre)))
-                elif r.partes:
-                    st.warning(_("'{0}' quedó con errores: no se guardó en la biblioteca.").format(parte.spec.nombre))
+                else:
+                    ss.sin_guardar.append(parte.spec)
             if r.spec is not None:
                 detalle = _("{0} iteraciones · {1} tokens").format(len(r.iteraciones), r.tokens)
                 if r.partes:
                     detalle = _("{0} formatos ({1} válidos)").format(len(r.partes), sum(p.valida for p in r.partes)) + " · " + detalle
                 st.metric(_("Resultado"), _("Válida") if r.valida else _("Con errores"), detalle)
+
+    # especificaciones con errores: no se guardan solas, pero el usuario puede guardarlas igual (queda advertido)
+    if ss.get("sin_guardar"):
+        with st.container(border=True):
+            st.warning(_("No se guardó en la biblioteca: {0}. El verificador encontró errores; revisalos en «Especificación».").format(
+                ", ".join(f"'{x.nombre}'" for x in ss.sin_guardar)))
+            if st.button(_("Guardar igual en la biblioteca")):
+                from regspec.llm.extractor import archivos_independientes, normalizar_decimales, separar_archivos
+
+                for sp in ss.sin_guardar:
+                    d, _notas = normalizar_decimales(json.loads(sp.model_dump_json()))
+                    # varios archivos en una especificación: se guarda uno por archivo (cada uno puede quedar válido)
+                    partes = separar_archivos(d) if archivos_independientes(d, ss.manual or "") else [d]
+                    for pd_ in partes:
+                        ver = verificar(pd_, ss.manual or None, chequear_evidencia=bool(ss.manual))
+                        sp_ = ver.spec or Especificacion.model_validate(pd_)
+                        slug = guardar_en_biblioteca(sp_, sp_.nombre)
+                        (st.success if ver.valida else st.warning)(
+                            _("Guardada en la biblioteca como '{0}'.").format(slug) + ("" if ver.valida else " " + _(
+                                "Tiene {0} errores del verificador: revisá que lea bien el archivo antes de usarla.").format(len(ver.errores))))
+                ss.sin_guardar = []
 
 # ---------------------------------------------------------------- 2. especificación
 with t2:

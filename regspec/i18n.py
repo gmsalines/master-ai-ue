@@ -91,7 +91,10 @@ PT: dict[str, str] = {
     "Válida": "Válida",
     "Con errores": "Com erros",
     "{0} iteraciones · {1} tokens": "{0} iterações · {1} tokens",
-    "'{0}' quedó con errores: no se guardó en la biblioteca.": "'{0}' ficou com erros: não foi salva na biblioteca.",
+    "No se guardó en la biblioteca: {0}. El verificador encontró errores; revisalos en «Especificación».": "Não foi salvo na biblioteca: {0}. O verificador encontrou erros; revise-os em «Especificação».",
+    "Guardar igual en la biblioteca": "Salvar mesmo assim na biblioteca",
+    "Guardada en la biblioteca como '{0}'.": "Salva na biblioteca como '{0}'.",
+    "Tiene {0} errores del verificador: revisá que lea bien el archivo antes de usarla.": "Tem {0} erros do verificador: confira se lê bem o arquivo antes de usá-la.",
     "{0} formatos ({1} válidos)": "{0} formatos ({1} válidos)",
     # especificación
     "Primero compilá un manual o cargá una especificación.": "Primeiro compile um manual ou carregue uma especificação.",

@@ -136,7 +136,15 @@ def _ajustar(c: Campo, v: Any) -> Any:
 
 
 def _lado_asignable(nodo: ast.AST, tr: Optional[TipoRegistro]):
-    """Si la regla es `campo == expr` (o simétrica) devuelve (campo, expr_ast)."""
+    """Si la regla es `campo == expr` (o simétrica) devuelve (campo, expr_ast). También acepta la forma con
+    tolerancia `abs(campo - expr) <= t`, habitual en importes calculados («monto × alícuota / 100»)."""
+    if (isinstance(nodo, ast.Compare) and len(nodo.ops) == 1 and isinstance(nodo.ops[0], (ast.LtE, ast.Lt))
+            and isinstance(nodo.left, ast.Call) and getattr(nodo.left.func, "id", "") == "abs" and len(nodo.left.args) == 1
+            and isinstance(nodo.left.args[0], ast.BinOp) and isinstance(nodo.left.args[0].op, ast.Sub)):
+        resta = nodo.left.args[0]
+        for a, b in ((resta.left, resta.right), (resta.right, resta.left)):
+            if isinstance(a, ast.Name):
+                return a.id, b
     if isinstance(nodo, ast.Compare) and len(nodo.ops) == 1 and isinstance(nodo.ops[0], ast.Eq):
         izq, der = nodo.left, nodo.comparators[0]
         for a, b in ((izq, der), (der, izq)):

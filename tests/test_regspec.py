@@ -1372,3 +1372,11 @@ def test_contexto_del_registro_incluye_su_tabla_aunque_el_pdf_separe_las_filas()
              "2)  Presentación ficticia:\n\n   1     Monto retenido    Numérico(18,2)\n")
     ctx = contexto_registro(dividir(texto), {"codigo": "A1", "nombre": "Padrón ficticio"})
     assert "Letra de alícuota" in ctx and "Monto retenido" not in ctx
+
+
+def test_regla_con_tolerancia_se_puede_generar():
+    d = _dos_archivos(alicuota_longitud=4)
+    d = {**d, "tipos_registro": d["tipos_registro"][1:], "reglas": [
+        {"id": "R1", "ambito": "registro", "tipo_registro": "D", "descripcion": "retenido = monto x alícuota / 100",
+         "expresion": "abs(monto_retenido - redondear(identificador * alicuota / 100, 2)) <= 0.01", "evidencia": "x"}]}
+    assert "REGLAS_INSATISFACIBLES" not in {p.codigo for p in verificar(d).errores}

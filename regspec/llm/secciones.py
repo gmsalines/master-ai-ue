@@ -210,6 +210,25 @@ def aplicar_revision(borrador: list[dict], rev: dict) -> list[dict]:
     return campos
 
 
+def campos_de_respuesta(d) -> list:
+    """Los campos que devolvió el modelo, aunque los envuelva distinto: {"campos": […]}, una lista suelta,
+    {"tipos_registro": [{"campos": […]}]} o {"registro": {"campos": […]}}."""
+    if isinstance(d, list):
+        return [c for c in d if isinstance(c, dict)]
+    if not isinstance(d, dict):
+        return []
+    if isinstance(d.get("campos"), list):
+        return [c for c in d["campos"] if isinstance(c, dict)]
+    for clave in ("tipos_registro", "registros"):
+        for t in d.get(clave) or []:
+            if isinstance(t, dict) and isinstance(t.get("campos"), list) and t["campos"]:
+                return [c for c in t["campos"] if isinstance(c, dict)]
+    for v in d.values():
+        if isinstance(v, dict) and isinstance(v.get("campos"), list):
+            return [c for c in v["campos"] if isinstance(c, dict)]
+    return []
+
+
 # ------------------------------------------------------------------ pipeline
 
 
@@ -282,7 +301,7 @@ def borrador_por_secciones(manual: str, proveedor: Proveedor, extraer_json, max_
             d = _llamar(proveedor, mensajes_con_contexto(ctx, _pedido_campos(esq, tr)), f"campos {codigo}",
                         max_tokens, temperatura, extraer_json, b.pasos)
             avisar()
-            tr["campos"] = d.get("campos", d if isinstance(d, list) else [])
+            tr["campos"] = campos_de_respuesta(d)
         esq["tipos_registro"] = trs
         d = _llamar(proveedor, mensajes_con_contexto(contexto_reglas(frags), _pedido_reglas(esq)),
                     "reglas", max_tokens, temperatura, extraer_json, b.pasos)

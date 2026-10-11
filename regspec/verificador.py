@@ -262,6 +262,10 @@ def verificar(
         if tr.codigo in vistos:
             err("CODIGO_DUPLICADO", r, f"el código '{tr.codigo}' ya se usó en tipos_registro[{vistos[tr.codigo]}]", etapa="estructura")
         vistos[tr.codigo] = i
+        if not tr.campos:
+            err("SIN_CAMPOS", r, "el registro no tiene campos",
+                "Copiá del manual la tabla de campos de este registro (nombre, tipo, longitud y evidencia de cada uno).",
+                "estructura")
         if tr.max_ocurrencias is not None and tr.max_ocurrencias < tr.min_ocurrencias:
             err("OCURRENCIAS", r, f"max_ocurrencias ({tr.max_ocurrencias}) < min_ocurrencias ({tr.min_ocurrencias})", etapa="estructura")
         if xml and not NCNAME.match(tr.etiqueta_xml or ""):

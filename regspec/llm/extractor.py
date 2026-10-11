@@ -288,9 +288,12 @@ def aplicar_parche(d: dict, parche: dict) -> dict:
     return d
 
 
-def proteger_reglas(anterior: Optional[dict], nuevo: dict, manual: str) -> tuple[dict, list[str]]:
+def proteger_reglas(anterior: Optional[dict], nuevo: dict, manual: str,
+                    descartables: frozenset = frozenset()) -> tuple[dict, list[str]]:
     """Impide que el modelo "apruebe" el verificador borrando reglas: toda regla anterior con evidencia literal
-    en el manual que desaparece se restaura, y se informa para que la corrija en lugar de eliminarla."""
+    en el manual que desaparece se restaura, y se informa para que la corrija en lugar de eliminarla.
+    `descartables`: reglas que el lenguaje no pudo expresar en las dos últimas iteraciones; esas sí se pueden quitar
+    (quedan anotadas para revisión manual) porque restaurarlas solo repite el mismo error."""
     from ..verificador import evidencia_en_manual, normalizar
 
     if not anterior or not isinstance(nuevo, dict):
@@ -304,6 +307,8 @@ def proteger_reglas(anterior: Optional[dict], nuevo: dict, manual: str) -> tuple
         if not isinstance(r, dict):
             continue
         presente = normalizar(str(r.get("evidencia", ""))) in claves or str(r.get("id")) in claves
+        if not presente and str(r.get("id")) in descartables:
+            continue
         if not presente and evidencia_en_manual(str(r.get("evidencia", "")), mn, lineas_norm=lineas):
             nuevas.append(r)
             restauradas.append(str(r.get("id")))
@@ -445,6 +450,18 @@ def registros_de_respaldo(manual: str) -> list[dict]:
     return []
 
 
+def _anotar_descartadas(anterior, nuevo, descartables, res) -> None:
+    """Deja constancia de las reglas que se quitaron porque el lenguaje no pudo expresarlas."""
+    if not descartables or not isinstance(anterior, dict) or not isinstance(nuevo, dict):
+        return
+    quedan = {str(r.get("id")) for r in nuevo.get("reglas") or [] if isinstance(r, dict)}
+    for r in anterior.get("reglas") or []:
+        if isinstance(r, dict) and str(r.get("id")) in descartables and str(r.get("id")) not in quedan:
+            nota = (f"La regla {r.get('id')} no se pudo expresar en el lenguaje de reglas después de dos intentos y se "
+                    f"descartó: revisala a mano. Manual: «{str(r.get('evidencia', ''))[:160]}»")
+            if nota not in res.notas:
+                res.notas.append(nota)
+
 SIN_REGISTROS_MSG = ("no se encontró ningún tipo de registro en el manual: revisá que sea el manual técnico del archivo "
                      "(el que describe sus campos, formatos y posiciones)")
 
@@ -465,6 +482,7 @@ def extraer(manual: str, proveedor: Proveedor, config: Optional[ConfigExtraccion
     corregida: Optional[tuple[dict, Respuesta]] = None  # corrección por lotes ya aplicada (modo secciones)
     ultima_huella = None
     rest_pendientes: list[str] = []
+    invalidas: dict[str, int] = {}  # id de regla -> iteraciones seguidas en que el lenguaje no pudo expresarla
 
     for n in range(1, n_iter + 1):
         if n == 1 and inicial is not None:  # se continúa desde una especificación ya armada (p. ej. un archivo de varios)
@@ -518,7 +536,9 @@ def extraer(manual: str, proveedor: Proveedor, config: Optional[ConfigExtraccion
                 and not d.get("tipos_registro")):
             # una corrección no puede dejar el archivo sin registros: se conservan los de la iteración anterior
             d = {**d, "tipos_registro": copy.deepcopy(actual["tipos_registro"])}
-        d, restauradas = proteger_reglas(actual, d, manual)
+        descartables = frozenset(k for k, v in invalidas.items() if v >= 2)
+        d, restauradas = proteger_reglas(actual, d, manual, descartables)
+        _anotar_descartadas(actual, d, descartables, res)
         restauradas, rest_pendientes = restauradas + rest_pendientes, []
         if isinstance(d, dict) and not _separar and inicial is not None and (inicial.get("tipos_registro") or [None])[0]:
             d, recortada = solo_un_archivo(d, inicial["tipos_registro"][0])
@@ -581,6 +601,13 @@ def extraer(manual: str, proveedor: Proveedor, config: Optional[ConfigExtraccion
             d, manual, chequear_evidencia=cfg.chequear_evidencia, chequear_ejecucion=cfg.chequear_ejecucion
         )
         problemas = [p.a_texto() for p in ver.errores]
+        ids_reglas = [str(x.get("id")) for x in (d.get("reglas") or []) if isinstance(x, dict)] if isinstance(d, dict) else []
+        ahora = set()
+        for p in ver.errores:
+            m = _RX_RG.match(p.ruta)
+            if p.codigo == "REGLA_INVALIDA" and m and int(m.group(1)) < len(ids_reglas):
+                ahora.add(ids_reglas[int(m.group(1))])
+        invalidas = {k: invalidas.get(k, 0) + 1 for k in ahora}
         if restauradas:
             res.reglas_restauradas += restauradas
             problemas.append(f"[REGLA_ELIMINADA] reglas {', '.join(restauradas)}: se eliminaron reglas respaldadas por el "
@@ -598,6 +625,16 @@ def extraer(manual: str, proveedor: Proveedor, config: Optional[ConfigExtraccion
         # sin progreso: misma especificación y mismos problemas que la iteración anterior -> no gastar más tokens
         huella = (json.dumps(d, sort_keys=True, ensure_ascii=False, default=str), tuple(problemas))
         if huella == ultima_huella:
+            trabadas = frozenset(k for k, v in invalidas.items() if v >= 2)
+            if trabadas and isinstance(d, dict):
+                # el modelo no logra expresar estas reglas en el lenguaje: se quitan (quedan anotadas para revisión
+                # manual) y se vuelve a verificar sin otra llamada al modelo
+                sin = {**d, "reglas": [x for x in d.get("reglas") or [] if not (isinstance(x, dict) and str(x.get("id")) in trabadas)]}
+                _anotar_descartadas(d, sin, trabadas, res)
+                invalidas = {k: v for k, v in invalidas.items() if k not in trabadas}
+                corregida = (sin, Respuesta("", 0, 0, 0.0, getattr(proveedor, "modelo", "")))
+                actual, ultima_huella = sin, None
+                continue
             res.error = "la corrección no produjo cambios; se detiene para no gastar tokens"
             break
         ultima_huella = huella
@@ -630,7 +667,7 @@ def extraer(manual: str, proveedor: Proveedor, config: Optional[ConfigExtraccion
                 res.error = str(e)
                 res.cupo_agotado = isinstance(e, CupoAgotado)
                 break
-            nuevo, rest_lote = proteger_reglas(d, nuevo, manual)
+            nuevo, rest_lote = proteger_reglas(d, nuevo, manual, frozenset(k for k, v in invalidas.items() if v >= 2))
             rest_pendientes = rest_lote
             corregida = (nuevo, Respuesta("", te, ts, lat, getattr(proveedor, "modelo", "")))
             continue

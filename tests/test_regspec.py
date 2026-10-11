@@ -1337,3 +1337,28 @@ def test_texto_de_pdf_detecta_una_palabra_por_linea():
     from regspec.texto_pdf import _fragmentado
     assert _fragmentado("\n".join("Tipo de Archivo: txt comprimido como zip".split() * 5))
     assert not _fragmentado("\n".join(["1) Padrón para los Agentes:", "Tipo de Archivo: txt, campos delimitados"] * 12))
+
+
+def test_campos_envueltos_distinto_y_registro_sin_campos():
+    from regspec.llm.secciones import campos_de_respuesta
+    c = [{"nombre": "cuit", "tipo": "numerico", "longitud": 11}]
+    for forma in (c, {"campos": c}, {"tipos_registro": [{"codigo": "A2", "campos": c}]}, {"registro": {"campos": c}}):
+        assert campos_de_respuesta(forma) == c
+    assert campos_de_respuesta({"otra": 1}) == []
+    d = _dos_archivos()
+    d["tipos_registro"][1]["campos"] = []
+    assert "SIN_CAMPOS" in {p.codigo for p in verificar(d).errores}
+
+
+def test_metodo_de_texto_sugiere_patron_y_regla_descartable():
+    from regspec.llm.extractor import proteger_reglas
+    d = _dos_archivos()
+    d = {**d, "tipos_registro": d["tipos_registro"][:1], "reglas": [
+        {"id": "R1", "ambito": "registro", "tipo_registro": "P", "expresion": "letra_alicuota.startswith('0')",
+         "descripcion": "x", "evidencia": "x"}]}
+    probs = [p for p in verificar(d).errores if p.codigo == "REGLA_INVALIDA"]
+    assert probs and "patron" in probs[0].a_texto()
+    manual = "El primer carácter es siempre cero."
+    antes = {"reglas": [{"id": "R1", "expresion": "x", "evidencia": "El primer carácter es siempre cero."}]}
+    assert proteger_reglas(antes, {"reglas": []}, manual)[1] == ["R1"]  # se restaura
+    assert proteger_reglas(antes, {"reglas": []}, manual, frozenset({"R1"}))[1] == []  # tras dos intentos, se deja ir

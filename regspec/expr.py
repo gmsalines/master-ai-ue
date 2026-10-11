@@ -183,6 +183,12 @@ class Chequeador:
                              "Solo se admiten campos, constantes, operadores aritméticos/lógicos/de comparación y las funciones del lenguaje.")
 
     def _tipo_llamada(self, n: ast.Call) -> str:
+        if isinstance(n.func, ast.Attribute):
+            raise ErrorExpresion(
+                f"los métodos de texto (.{n.func.attr}…) no existen en el lenguaje de reglas",
+                "Si la condición es sobre el formato de un solo campo (empieza con, solo dígitos, largo), no es una regla: "
+                "ponela en el atributo «patron» del campo como expresión regular (p. ej. ^0) y quitá la regla. "
+                f"Funciones disponibles: {', '.join(sorted(FUNCIONES))}.")
         if not isinstance(n.func, ast.Name) or n.keywords:
             raise ErrorExpresion("solo se admiten llamadas simples a funciones del lenguaje, sin argumentos con nombre")
         f, a = n.func.id, n.args

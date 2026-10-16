@@ -244,6 +244,15 @@ class Agregacion:
     salida: str = "filas"                 # filas | resumir
     acompanan: str = "suma"               # en «resumir», cómo se llevan las columnas que no son del grupo
     mostrar: list[str] = field(default_factory=lambda: list(COLUMNAS_AUXILIARES))
+    nombre: str = ""                      # nombre de la columna calculada («débito + crédito»); vacío = los genéricos
+
+    def etiqueta(self, col: str) -> str:
+        """Nombre con que sale una columna auxiliar: con `nombre`, «valor calculado» -> «<nombre>» y
+        «total del grupo» -> «total <nombre>»; las demás no cambian."""
+        n = (self.nombre or "").strip()
+        if not n:
+            return col
+        return {COL_VALOR: n, COL_TOTAL: f"total {n}"}.get(col, col)
 
     def columnas(self) -> list[str]:
         """Columnas del archivo que usa la agregación (para avisar si faltan)."""
@@ -355,13 +364,14 @@ class Agregacion:
             tot = tot.drop(columns=COL_CATEGORIA)
         llave_t = [c for c in tot.columns if c not in ("filas",)]
         totales = tot.groupby(llave_t, sort=False, dropna=False)["filas"].sum().reset_index()
+        totales = totales.rename(columns={COL_TOTAL: self.etiqueta(COL_TOTAL)})
 
         # filas excluidas por la condición
         no = ~cumple
         if no.any():
             e = df[no].copy()
             e["motivo"] = np.where((~tiene)[no].to_numpy(), MOTIVO_SIN_UMBRAL, MOTIVO_UMBRAL)
-            e[COL_TOTAL], e[COL_UMBRAL] = total[no].to_numpy(), umbral_txt[no].to_numpy()
+            e[self.etiqueta(COL_TOTAL)], e[COL_UMBRAL] = total[no].to_numpy(), umbral_txt[no].to_numpy()
             excl.append(e)
         excluidas = pd.concat(excl, ignore_index=True) if excl else pd.DataFrame(columns=["motivo"])
 
@@ -376,7 +386,7 @@ class Agregacion:
         else:
             for k, v in aux.items():
                 if k in self.mostrar:
-                    ok_df[_libre(ok_df, k)] = v.to_numpy()
+                    ok_df[_libre(ok_df, self.etiqueta(k))] = v.to_numpy()
         return ok_df, excluidas, totales
 
     def _resumir(self, df: pd.DataFrame, grupo: list[str], aux: dict) -> pd.DataFrame:
@@ -402,7 +412,7 @@ class Agregacion:
                                 index=df.index).groupby(claves, sort=False, dropna=False).first()
         for k in primeros.columns:
             if k in self.mostrar or k == COL_TOTAL:  # en un resumen el total siempre va: es el dato del grupo
-                out[_libre(out, k)] = primeros[k]
+                out[_libre(out, self.etiqueta(k))] = primeros[k]
         out["filas del grupo"] = pd.Series(1, index=df.index).groupby(claves, sort=False, dropna=False).sum()
         out = out.reset_index()
         return out
@@ -471,8 +481,9 @@ class ArchivoGrupo:
             aux = [c for c in aux if c != COL_CATEGORIA]
         if a.condicion == "ninguna":
             aux = [c for c in aux if c != COL_UMBRAL]
+        aux = [a.etiqueta(c) for c in aux]
         if a.salida == "resumir":
-            aux = [c for c in aux if c != COL_VALOR] + ["filas del grupo"]
+            aux = [c for c in aux if c != a.etiqueta(COL_VALOR)] + ["filas del grupo"]
         return cols + [c for c in aux if c not in cols]
 
 
@@ -701,7 +712,9 @@ def cruzar_grupos(grupos: list[Grupo], comparar: list[tuple[str, ...]] = (), tol
     """
     funciones = list(funciones or []) + ["suma"] * max(0, len(comparar) - len(funciones or []))
     # el total de una agregación se repite en cada fila de su grupo: sumarlo por llave lo multiplicaría
-    funciones = ["unico" if any(c in (COL_TOTAL, COL_UMBRAL) for c in t) else fn for t, fn in zip(comparar, funciones)]
+    por_grupo = {COL_TOTAL, COL_UMBRAL} | {a.agregacion.etiqueta(COL_TOTAL) for g in grupos for a in g.archivos
+                                           if getattr(a, "agregacion", None) is not None}
+    funciones = ["unico" if any(c in por_grupo for c in t) else fn for t, fn in zip(comparar, funciones)]
     for g in grupos:
         g.unicos = sorted({t[i] for t, fn in zip(comparar, funciones) if fn == "unico"
                            for i, gg in enumerate(grupos) if gg is g and i < len(t)})

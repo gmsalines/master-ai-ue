@@ -67,6 +67,7 @@ class AgregacionCfg(BaseModel):
     salida: str = "filas"
     acompanan: str = "suma"
     mostrar: list[str] = Field(default_factory=lambda: ["valor calculado", "total del grupo", "umbral aplicado", "categoría"])
+    nombre: str = ""
 
     def a_agregacion(self):
         from regspec.grupos import Agregacion, Termino, Umbral

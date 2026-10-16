@@ -1333,6 +1333,30 @@ def test_total_del_grupo_y_resumir_con_distinta_cantidad_de_filas():
         assert m.loc["A", "Cliente.total del grupo"] == 2500 and m.loc["A", "Cliente.cred"] == 2200
 
 
+def test_columna_calculada_con_nombre():
+    """Pedido de la usuaria: la columna nueva lleva un nombre, para no adivinar cuál es al comparar."""
+    import pandas as pd
+
+    from regspec.almacen import AgregacionCfg
+    from regspec.grupos import Agregacion, ArchivoGrupo, Grupo, Termino, Umbral, cruzar_grupos
+    cli = pd.DataFrame({"doc": ["A", "A", "B", "C"], "cred": [1000, 1500, 3000, 50], "deb": [0, 0, 100, 10]})
+    ctl = pd.DataFrame({"doc": ["A", "B", "C"], "cred": [2500, 3000, 50], "deb": [0, 100, 10]})
+    g1 = Agregacion([Termino("cred"), Termino("deb")], ["doc"], "suma", "unica", None, [Umbral(">=", 2000)],
+                    nombre="débito + crédito")
+    g2 = Agregacion([Termino("cred"), Termino("deb")], ["doc"], "suma", "ninguna", nombre="débito + crédito")
+    a1 = ArchivoGrupo("c", cli, ["doc"], agregacion=g1)
+    assert {"débito + crédito", "total débito + crédito"} <= set(a1.columnas_resultado())
+    assert "total del grupo" not in a1.columnas_resultado()
+    r = cruzar_grupos([Grupo("Cliente", [a1]), Grupo("Control", [ArchivoGrupo("k", ctl, ["doc"], agregacion=g2)])],
+                      [("total débito + crédito", "total débito + crédito")])
+    # el total con nombre se compara como valor único (sumarlo por llave lo duplicaría: A tiene dos filas)
+    assert r.resumen["en todos, iguales"] == 2 and r.resumen["en todos, con diferencias"] == 0
+    assert r.matriz.set_index("llave").loc["A", "Cliente.total débito + crédito"] == 2500
+    assert "total débito + crédito" in r.excluidas.columns  # C queda excluida con su total
+    assert AgregacionCfg.desde(g1).a_agregacion().nombre == "débito + crédito"
+    assert AgregacionCfg.model_validate({}).a_agregacion().etiqueta("total del grupo") == "total del grupo"
+
+
 def test_texto_de_pdf_detecta_una_palabra_por_linea():
     from regspec.texto_pdf import _fragmentado
     assert _fragmentado("\n".join("Tipo de Archivo: txt comprimido como zip".split() * 5))

@@ -783,6 +783,11 @@ with tc:
         with st.container(border=True):
             # 1. fórmula
             st.markdown(_("**Columna calculada (por fila)**"))
+            nombre_calc = st.text_input(
+                _("Nombre de la columna calculada"), value=previa.nombre if previa else "", key=f"ag_nom_{k}",
+                placeholder=_("por ejemplo: débito + crédito"),
+                help=_("Con un nombre, las columnas nuevas se llaman «<nombre>» y «total <nombre>», y así aparecen al elegir "
+                       "qué comparar y en el Excel. Vacío: «valor calculado» y «total del grupo»."))
             kn = f"ag_nt_{k}"
             ss.setdefault(kn, max(1, len(previa.terminos) if previa else 2))
             terminos = []
@@ -882,9 +887,11 @@ with tc:
                                .format(", ".join(fuera)))
             mostrar = st.multiselect(_("Columnas que se agregan al resultado"), COLUMNAS_AUXILIARES,
                                      default=[c for c in (previa.mostrar if previa else COLUMNAS_AUXILIARES) if c in COLUMNAS_AUXILIARES],
-                                     format_func=_, key=f"ag_most_{k}",
+                                     format_func=lambda c, n=nombre_calc.strip(): Agregacion(nombre=n).etiqueta(c) if n else _(c),
+                                     key=f"ag_most_{k}_{nombre_calc.strip()}",  # con el nombre: así se ven las etiquetas nuevas
                                      help=_("Se ven en el detalle de cada grupo y en el Excel; también se pueden elegir como importe a comparar."))
-            ag = Agregacion(terminos, agrupar, funcion, condicion, categoria, umbrales, otros, salida, acompanan, mostrar)
+            ag = Agregacion(terminos, agrupar, funcion, condicion, categoria, umbrales, otros, salida, acompanan, mostrar,
+                            nombre=nombre_calc.strip())
             st.caption(_("Fórmula: {0}").format(ag.formula()) +
                        (" · " + " · ".join(f"{', '.join(u.valores) or _('todas')}: {u.texto()}" for u in umbrales) if umbrales else ""))
             if condicion == "categoria" and not umbrales:
@@ -1249,6 +1256,9 @@ with tc:
         st.caption(_("Elegí la columna de importe de cada grupo; se suman por llave y se comparan con la tolerancia."))
         n_cmp = st.number_input(_("Cantidad de importes a comparar"), 0, 5, min(5, len(cfg.comparaciones)) if cfg is not None else 1, key=f"ncmp_{V}")
         comparaciones, funciones_cmp = [], []
+        # totales de una agregación (con su nombre, si se le puso uno): se comparan como valor único por llave
+        totales_ag = {a.agregacion.etiqueta("total del grupo") for _n, arch, _m, _c in listos for a in arch
+                      if getattr(a, "agregacion", None) is not None}
         for k in range(int(n_cmp)):
             cc = st.columns(len(listos))
             fila = []
@@ -1267,7 +1277,8 @@ with tc:
                 fila.append(cc[j].selectbox(f"{nom}", cols_g, index=cols_g.index(elegido), key=f"cmp_{k}_{j}_{V}"))
             comparaciones.append(tuple(fila))
             fn_prev = (cfg.funciones_comparacion[k] if cfg is not None and k < len(cfg.funciones_comparacion) else
-                       "unico" if re.search(r"al[ií]cuota|tarifa|tasa|rate|porcentaje|%|total del grupo|umbral aplicado", " ".join(fila), re.I)
+                       "unico" if (re.search(r"al[ií]cuota|tarifa|tasa|rate|porcentaje|%|total del grupo|umbral aplicado",
+                                             " ".join(fila), re.I) or any(c in totales_ag for c in fila))
                        else "suma")
             funciones_cmp.append(st.radio(_("Cómo se agrupa por llave"), list(FUNCIONES_COMPARACION), horizontal=True,
                                           index=list(FUNCIONES_COMPARACION).index(fn_prev) if fn_prev in FUNCIONES_COMPARACION else 0,

@@ -994,7 +994,8 @@ with tc:
                 if st.button(_("🤖 Pedir la llave a la IA"), key=f"ia_llave_{len(leidas)}", disabled=proveedor is None):
                     with st.spinner(_("Consultando a la IA…")):
                         try:
-                            r_ia = sugerir_llaves_ia([d for _, _, d in leidas], proveedor, [f.name for _, f, _ in leidas])
+                            r_ia = sugerir_llaves_ia([d for _, _, d in leidas], proveedor, [f.name for _, f, _ in leidas],
+                                                     grupos=[gi for gi, _f, _d in leidas])
                         except Exception as e:  # noqa: BLE001
                             r_ia = None
                             st.error(_("La IA no pudo proponer una llave: {0}").format(e))
@@ -1004,12 +1005,25 @@ with tc:
                         ss.llaves_ia[firma] = r_ia
                         st.rerun()
         if ia_res is not None:
-            if ia_res["validada"]:
-                st.success(_("🤖 La IA propuso la llave y la validación la confirmó (coincide entre archivos e identifica registros: solidez ≥ 50 %). "
-                             "Revisala abajo. Motivo: {0}").format(ia_res["motivo"]))
+            prop = ia_res.get("propuesta") or []
+            nombres_l = [f.name for _g, f, _d in leidas]
+            final_txt = " · ".join(f"{n}: {' + '.join(x[0])} ({x[2]:.0%})" for n, x in zip(nombres_l, ia_res["llaves"]) if x is not None)
+            prop_txt = " + ".join(prop[0]) if prop and prop[0] else _("(ninguna columna válida)")
+            intentos_txt = _(" Necesitó {0} intentos: el primero no pasó la validación y se le devolvió el resultado.").format(
+                ia_res["intentos"]) if ia_res.get("intentos", 1) > 1 else ""
+            if ia_res["validada"] and ia_res.get("reducida"):
+                st.success(_("🤖 La IA propuso {0}. El código la validó con los datos y la simplificó a la menor combinación de "
+                             "esas columnas que coincide entre los grupos: {1}.").format(prop_txt, final_txt)
+                           + intentos_txt + " " + _("Revisala abajo. Motivo de la IA: {0}").format(ia_res["motivo"]))
+            elif ia_res["validada"]:
+                st.success(_("🤖 La IA propuso la llave y la validación la confirmó: {0} (coincidencia × unicidad).").format(final_txt)
+                           + intentos_txt + " " + _("Revisala abajo. Motivo de la IA: {0}").format(ia_res["motivo"]))
             else:
-                st.warning(_("🤖 La propuesta de la IA no pasó la validación en todos los archivos; donde no la pasó se mantiene "
-                             "la sugerencia del código. Motivo: {0}").format(ia_res["motivo"]))
+                det = ia_res.get("detalle") or []
+                det_txt = " · ".join(f"{n}: {(x or 0):.0%}" for n, x in list(zip(nombres_l, det))[1:])
+                st.warning(_("🤖 La IA propuso {0} y no pasó la validación ({1}), ni completa ni con menos columnas. "
+                             "Se mantiene la sugerencia del modelo de llave.").format(prop_txt, det_txt or _("sin llave por archivo"))
+                           + intentos_txt)
 
     # describir el cruce con texto: el LLM propone la configuración, la validación la corrige y se carga en el formulario
     if leidas and len({gi for gi, _f, _d in leidas}) >= 2:

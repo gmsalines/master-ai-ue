@@ -973,18 +973,36 @@ def solidez_llave(ancla: pd.DataFrame, cols_ancla: list[str], df: pd.DataFrame, 
     return contencion * min(_factor_unicidad(_unicidad(a)), _factor_unicidad(_unicidad(b)))
 
 
+def _solidez_series(a: pd.Series, b: pd.Series) -> float:
+    ka, kb = set(pd.unique(a)), set(pd.unique(b))
+    if not ka or not kb:
+        return 0.0
+    return len(ka & kb) / min(len(ka), len(kb)) * min(_factor_unicidad(_unicidad(a)), _factor_unicidad(_unicidad(b)))
+
+
 def sugerir_llaves_ia(tablas: list[pd.DataFrame], proveedor, nombres: Optional[list[str]] = None, muestras: int = 5,
-                      umbral: float = SOLIDEZ_MINIMA) -> dict:
-    """Pide al LLM la llave de cada tabla cuando el código no encontró una clara. Respaldo **validado**:
+                      umbral: float = SOLIDEZ_MINIMA, max_intentos: int = 2, grupos: Optional[list] = None) -> dict:
+    """Pide al LLM la llave de cada tabla. Respaldo **validado y corregido**, con el mismo esquema que el compilador
+    («la IA propone, el código comprueba y devuelve el error»):
 
     1. al LLM solo se le envían nombres de columna y `muestras` valores de ejemplo por columna;
     2. se descartan columnas inventadas y normalizaciones desconocidas;
-    3. la llave propuesta se comprueba con el mismo criterio que el código: una tabla queda con la llave de la IA
-       solo si su solidez frente al ancla (contención × unicidad) alcanza `umbral`.
+    3. la llave se comprueba con el criterio del código: solidez frente al ancla (contención × unicidad) >= `umbral`;
+    4. si una llave compuesta no pasa, el código prueba sus combinaciones más chicas (las mismas columnas, en el mismo
+       orden en todas las tablas) y se queda con la menor que pasa: el modelo suele agregar columnas «por las dudas»
+       (nombre, período) que se escriben distinto en cada archivo;
+    5. si ni así pasa, se le devuelve al modelo la solidez obtenida y tiene otro intento (`max_intentos`).
 
-    Devuelve {"llaves": [(columnas, transformacion, solidez) | None por tabla], "validada": bool,
-    "motivo": str, "tokens": int}.
+    `grupos` (uno por tabla): las tablas del mismo grupo se concatenan y se validan juntas contra los otros grupos.
+    Dos archivos de un mismo grupo (p. ej. dos plantillas que se suman) no comparten registros: compararlos entre sí
+    rechazaría una llave correcta.
+
+    Devuelve {"llaves": [(columnas, transformacion, solidez) | None por tabla], "validada": bool, "motivo": str,
+    "tokens": int, "propuesta": [columnas por tabla del último intento], "reducida": bool, "intentos": int,
+    "detalle": [solidez por tabla de la propuesta tal cual]}.
     """
+    from itertools import combinations
+
     nombres = nombres or [f"tabla_{i + 1}" for i in range(len(tablas))]
 
     def perfil(df):
@@ -998,36 +1016,90 @@ def sugerir_llaves_ia(tablas: list[pd.DataFrame], proveedor, nombres: Optional[l
         "registro (la llave), para poder cruzarlas. Columnas con ejemplos de valores:\n"
         f"{tablas_txt}\n"
         "Todas las llaves deben tener la misma cantidad de columnas y el mismo significado, en el mismo orden. "
+        "Usá la llave MÁS CHICA posible: normalmente UNA columna (documento, CUIT, número de comprobante) cuyos VALORES "
+        "de ejemplo se parezcan entre las tablas. No agregues nombres, fechas, períodos ni cuentas si una columna ya "
+        "identifica el registro: cada archivo los escribe distinto y la llave deja de coincidir. "
         f"Normalizaciones posibles: {', '.join(TRANSFORMACIONES)} (una sola, común a todas). "
         'Respondé SOLO JSON: {"llaves": [["col", ...] por tabla, en orden], "normalizacion": "…", "motivo": "breve"}. '
         "Usá exactamente los nombres de columna dados."
     )
-    r = proveedor.completar([{"role": "user", "content": pedido}], modo_json=True, temperatura=0.0, max_tokens=800)
-    t = r.texto or ""
-    try:
-        d = json.loads(t[t.find("{"): t.rfind("}") + 1])
-    except ValueError:
-        d = {}
-    d = d if isinstance(d, dict) else {}
-    tokens = int(getattr(r, "tokens_entrada", 0) or 0) + int(getattr(r, "tokens_salida", 0) or 0)
-    tr = d.get("normalizacion") if d.get("normalizacion") in TRANSFORMACIONES else "exacta"
-    propuestas = list(d.get("llaves") or [])
-    propuestas += [[]] * (len(tablas) - len(propuestas))
-    cols = []
-    for df, p in zip(tablas, propuestas):
-        p = [p] if isinstance(p, str) else list(p or [])
-        cols.append([c for c in p if c in df.columns])
-    n = len(cols[0])
-    out: list = [None] * len(tablas)
-    if n and all(len(c) == n for c in cols):
-        def evaluar(tr_):
-            sols = [solidez_llave(tablas[0], cols[0], df, c, tr_) for df, c in zip(tablas[1:], cols[1:])]
-            return [(cols[0], tr_, 1.0)] + [(c, tr_, s) if s >= umbral else None for c, s in zip(cols[1:], sols)]
-        out = evaluar(tr)
-        if tr == "exacta" and any(x is None for x in out):  # segunda oportunidad: la misma llave, solo números
-            alt = evaluar("solo_numeros")
-            if sum(x is not None for x in alt) > sum(x is not None for x in out):
-                out = alt
-    validada = all(x is not None for x in out)
-    return {"llaves": out, "validada": validada, "motivo": str(d.get("motivo", ""))[:300], "tokens": tokens}
+    mensajes = [{"role": "user", "content": pedido}]
+    tokens, intentos = 0, 0
+    res: dict = {}
+    while intentos < max_intentos:
+        intentos += 1
+        r = proveedor.completar(mensajes, modo_json=True, temperatura=0.0, max_tokens=800)
+        t = r.texto or ""
+        tokens += int(getattr(r, "tokens_entrada", 0) or 0) + int(getattr(r, "tokens_salida", 0) or 0)
+        try:
+            d = json.loads(t[t.find("{"): t.rfind("}") + 1])
+        except ValueError:
+            d = {}
+        d = d if isinstance(d, dict) else {}
+        tr = d.get("normalizacion") if d.get("normalizacion") in TRANSFORMACIONES else "exacta"
+        propuestas = list(d.get("llaves") or [])
+        propuestas += [[]] * (len(tablas) - len(propuestas))
+        cols = []
+        for df, p in zip(tablas, propuestas):
+            p = [p] if isinstance(p, str) else list(p or [])
+            cols.append([c for c in p if c in df.columns])
+        n = len(cols[0]) if cols else 0
+        out: list = [None] * len(tablas)
+        detalle: list = [None] * len(tablas)
+        reducida = False
+        if n and all(len(c) == n for c in cols):
+            def evaluar(cs, tr_):
+                if grupos is None:
+                    sols = [solidez_llave(tablas[0], cs[0], df, c, tr_) for df, c in zip(tablas[1:], cs[1:])]
+                    return [(cs[0], tr_, 1.0)] + [(c, tr_, s) if s >= umbral else None for c, s in zip(cs[1:], sols)], [1.0] + sols
+                # por grupo: la llave concatenada de cada grupo frente a la del grupo de la primera tabla
+                orden = list(dict.fromkeys(grupos))
+                serie = {g: pd.concat([_llave_compuesta(tablas[i], cs[i], tr_) for i in range(len(tablas)) if grupos[i] == g],
+                                      ignore_index=True) for g in orden}
+                sol_g = {g: 1.0 if g == orden[0] else _solidez_series(serie[orden[0]], serie[g]) for g in orden}
+                if len(orden) > 1:
+                    sol_g[orden[0]] = max(sol_g[g] for g in orden[1:])
+                sols = [sol_g[grupos[i]] for i in range(len(tablas))]
+                return [(c, tr_, s_) if s_ >= umbral else None for c, s_ in zip(cs, sols)], sols
+
+            def mejor(cs):
+                o, det = evaluar(cs, tr)
+                if tr == "exacta" and any(x is None for x in o):  # segunda oportunidad: la misma llave, solo números
+                    o2, det2 = evaluar(cs, "solo_numeros")
+                    if sum(x is not None for x in o2) > sum(x is not None for x in o):
+                        o, det = o2, det2
+                return o, det
+
+            out, detalle = mejor(cols)
+            if n > 1:
+                # reducción por código: subconjuntos de las posiciones propuestas, de menor a mayor. Se usa el menor que
+                # valida (y, si la llave completa ya validaba, que coincida igual de bien): menos columnas, menos
+                # formatos que tienen que coincidir entre archivos.
+                piso = min(x[2] for x in out) - 0.005 if all(x is not None for x in out) else umbral
+                for k in range(1, n):
+                    hallada = None
+                    for pos in combinations(range(n), k):
+                        o, _det = mejor([[c[i] for i in pos] for c in cols])
+                        if all(x is not None and x[2] >= piso for x in o):
+                            hallada = o
+                            break
+                    if hallada is not None:
+                        out, reducida = hallada, True
+                        break
+        validada = bool(out) and all(x is not None for x in out)
+        res = {"llaves": out, "validada": validada, "motivo": str(d.get("motivo", ""))[:300], "tokens": tokens,
+               "propuesta": cols, "reducida": reducida, "intentos": intentos, "detalle": detalle}
+        if validada:
+            break
+        # retroalimentación: el resultado de la validación vuelve al modelo (como en el compilador)
+        fallas = "; ".join(
+            f"{nombres[i]}: {' + '.join(cols[i]) or '(ninguna columna válida)'} coincide {(detalle[i] or 0):.0%}"
+            for i in range(1, len(tablas)) if out[i] is None) or "la respuesta no trae una llave por tabla"
+        mensajes = mensajes + [
+            {"role": "assistant", "content": t[:1500]},
+            {"role": "user", "content": (
+                f"La validación con los datos rechazó esa llave ({fallas}; se necesita al menos {umbral:.0%} de "
+                "coincidencia entre tablas y que identifique registros). Proponé otra: mirá los VALORES de ejemplo y "
+                "elegí la columna que tenga los mismos valores en todas las tablas. Mismo formato JSON.")}]
+    return res
 

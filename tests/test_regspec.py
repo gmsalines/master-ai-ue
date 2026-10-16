@@ -899,6 +899,32 @@ def test_llaves_ia_varias_tablas_valida_con_solidez():
     assert not llaves_claras([("Nro", "exacta", 1.0), ("Cli", "exacta", 0.1)]) and not llaves_claras([None, None])
 
 
+def test_llave_ia_compuesta_se_reduce_y_se_corrige_con_el_error():
+    """Caso real 4: la IA propuso documento + nombre + cuenta + período. Cada archivo escribe distinto el nombre, la
+    cuenta y el período: el código prueba las combinaciones más chicas de esas columnas y valida el documento."""
+    import pandas as pd
+    from regspec.grupos import sugerir_llaves_ia
+    docs = [f"{i:014d}" for i in range(1, 41)]
+    ent = pd.DataFrame({"cd_declared_document": docs, "nm_declared_full_name": [f"A & B {i}" for i in range(40)],
+                        "nr_declared_account": [str(100 + i) for i in range(40)], "dt_month": ["2026-05"] * 40})
+    ctl = pd.DataFrame({"Número do Declarado": [d.lstrip("0") for d in docs],
+                        "Nome do Declarado": [f"A &amp; B {i}" for i in range(40)],
+                        "Número da Conta": [f"||{20000 + i}" for i in range(40)], "AnoMes": ["202605"] * 40})
+    compuesta = ('{"llaves": [["cd_declared_document", "nm_declared_full_name", "nr_declared_account", "dt_month"], '
+                 '["Número do Declarado", "Nome do Declarado", "Número da Conta", "AnoMes"]], "normalizacion": "exacta"}')
+    prov = Guionado([compuesta])
+    r = sugerir_llaves_ia([ent, ctl], prov)
+    assert r["validada"] and r["reducida"] and r["intentos"] == 1 and len(prov.recibidos) == 1
+    assert r["llaves"][1][0] == ["Número do Declarado"] and r["llaves"][1][1] == "solo_numeros"
+    assert r["propuesta"][0][0] == "cd_declared_document" and r["detalle"][1] < 0.5
+    # si nada de lo propuesto sirve, el resultado vuelve al modelo y tiene otro intento
+    prov2 = Guionado(['{"llaves": [["dt_month"], ["AnoMes"]]}',
+                      '{"llaves": [["cd_declared_document"], ["Número do Declarado"]], "normalizacion": "solo_numeros"}'])
+    r2 = sugerir_llaves_ia([ent, ctl], prov2)
+    assert r2["validada"] and r2["intentos"] == 2 and not r2["reducida"]
+    assert "rechazó" in prov2.recibidos[1][-1]["content"] and "0%" in prov2.recibidos[1][-1]["content"]
+
+
 def test_llave_ia_sin_muestras_envia_solo_nombres():
     import pandas as pd
     from regspec.cruce import consultar_llave_ia

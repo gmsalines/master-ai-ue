@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import difflib
+import copy
 import io
 import json
 import os
@@ -858,6 +859,8 @@ with tc:
                                           key=f"ag_uval_{k}_{ui}")
                     if vals:
                         umbrales.append(Umbral(comp, val, vals))
+                    elif val:
+                        c1.caption(_("Elegí al menos un valor: sin valores, esta línea no se aplica."))
                 b1, b2, _h = st.columns([1, 1, 2])
                 if b1.button(_("➕ Otro umbral"), key=f"ag_umas_{k}"):
                     ss[ku] += 1
@@ -896,7 +899,21 @@ with tc:
                        (" · " + " · ".join(f"{', '.join(u.valores) or _('todas')}: {u.texto()}" for u in umbrales) if umbrales else ""))
             if condicion == "categoria" and not umbrales:
                 st.warning(_("Elegí al menos un valor y su umbral."))
+            else:
+                aviso_sin_umbral(ag, df)
         return ag
+
+    def aviso_sin_umbral(ag, df):
+        """Umbral por categoría: avisa qué valores no tienen umbral (sus filas se excluyen), con la cantidad de filas."""
+        if ag is None or ag.condicion != "categoria" or ag.categoria not in df.columns or ag.otros != "excluir" or not ag.umbrales:
+            return
+        sin = ~ag._umbral_por_fila(df)[3]
+        if sin.any():
+            vc = df.loc[sin, ag.categoria].astype("string").fillna("").str.strip().value_counts()
+            vals_txt = ", ".join(f"«{v or _('(vacío)')}» ({n:,})".replace(",", ".") for v, n in vc.head(5).items())
+            aviso = (_("Ningún valor de «{0}» tiene umbral: se excluyen TODAS las filas del archivo ({1}).")
+                     if sin.all() else _("Valores de «{0}» sin umbral, sus filas se excluyen: {1}."))
+            (st.error if sin.all() else st.warning)(aviso.format(ag.categoria, vals_txt))
 
     from regspec.grupos import sugerir_llaves
     from regspec.llave_ml import ejemplos_de_cruce, modelo_usuario, sugerir_llaves_modelo
@@ -1133,6 +1150,7 @@ with tc:
                 grupos_ui.append(None)
                 continue
             arch_objs, completo = [], True
+            ag_primera = None  # agrupación del primer archivo (los demás pueden usar la misma)
             for fi, f in enumerate(archivos):
                 acfg = cfg.archivo(gi, fi) if cfg is not None else None
                 with st.expander(f"📄 {f.name}", expanded=True):
@@ -1207,8 +1225,23 @@ with tc:
                     if st.button(_("➕ Otra condición"), key=f"masfil_{gi}_{fi}_{V}"):
                         ss[kn] += 1
                         st.rerun()
-                    agregacion = editor_agregacion(f, df, cols, llave, acfg.agregacion if acfg is not None else None,
-                                                   f"{gi}_{fi}_{V}")
+                    if fi > 0 and modo_g == "concatenar" and ag_primera is not None and st.checkbox(
+                            _("Usar la misma agrupación que «{0}»").format(archivos[0].name), value=True, key=f"ag_igual_{gi}_{fi}_{V}",
+                            help=_("Los archivos se suman fila a fila: lo normal es que lleven la misma fórmula, nombre y umbrales. "
+                                   "Destildá para configurar este archivo aparte.")):
+                        agregacion = copy.deepcopy(ag_primera)
+                        st.caption(_("Agrupación: {0}").format(agregacion.formula()) +
+                                   (f" · «{agregacion.nombre}»" if agregacion.nombre else ""))
+                        faltan_ag = [c for c in agregacion.columnas() if c not in cols]
+                        if faltan_ag:
+                            st.error(_("Este archivo no tiene las columnas de la agrupación: {0}").format(", ".join(faltan_ag)))
+                        else:
+                            aviso_sin_umbral(agregacion, df)
+                    else:
+                        agregacion = editor_agregacion(f, df, cols, llave, acfg.agregacion if acfg is not None else None,
+                                                       f"{gi}_{fi}_{V}")
+                    if fi == 0:
+                        ag_primera = agregacion
                     traer, buscar_por = [], []
                     if modo_g == "base_referencia" and fi > 0:
                         opciones_t = [c for c in cols if c not in llave]
@@ -1237,6 +1270,14 @@ with tc:
             cols_g = sorted({c for a in arch_objs for c in a.columnas_resultado()} |
                             {c for a in arch_objs for c in a.traer})
             if modo_g == "concatenar" and len(arch_objs) > 1:
+                ags = [a.agregacion for a in arch_objs]
+                if any(x is not None for x in ags):
+                    nombres_ag = {(x.etiqueta("total del grupo") if x is not None else None) for x in ags}
+                    if len(nombres_ag) > 1:
+                        st.error(_("Los archivos de «{0}» no tienen la misma agrupación (o la columna calculada tiene nombres "
+                                   "distintos: {1}). Al concatenar, las filas de cada archivo quedan en columnas distintas y al "
+                                   "comparar aparecen vacías. Usá la misma agrupación en todos.").format(
+                            nombre_g, ", ".join(f"«{n}»" if n else _("sin agrupación") for n in nombres_ag)))
                 if any(columnas_distintas(arch_objs[0].df, a.df) for a in arch_objs[1:]):
                     st.warning(_("Los archivos de «{0}» tienen columnas distintas y se van a concatenar (sumar sus filas). "
                                  "Si uno es un padrón o tabla de referencia, elegí «Base + referencia» en «Cómo combinar los archivos del grupo».").format(nombre_g))

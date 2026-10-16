@@ -17,6 +17,7 @@ import difflib
 import io
 import re
 import unicodedata
+import zipfile
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Optional
@@ -68,6 +69,59 @@ def leer_csv(contenido: bytes) -> pd.DataFrame:
         except UnicodeDecodeError:
             continue
     raise ValueError("no se pudo decodificar el CSV")  # latin-1 nunca falla: no se llega acá
+
+
+EXT_DATOS = ("csv", "txt", "dat", "xml", "xlsx", "xls", "xlsm")
+
+
+def es_zip(nombre: str) -> bool:
+    return nombre.lower().endswith(".zip")
+
+
+def miembro_zip(contenido: bytes) -> tuple[zipfile.ZipFile, zipfile.ZipInfo]:
+    """El archivo de datos de un ZIP (se lee solo el índice, no se descomprime nada).
+
+    Subir el ZIP tal como se descarga ocupa una fracción de la memoria: un CSV de 549 MB viene en 133 MB y se lee
+    descomprimiendo sobre la marcha. Por ahora, un archivo de datos por ZIP."""
+    z = zipfile.ZipFile(io.BytesIO(contenido))
+    datos = [i for i in z.infolist() if not i.is_dir() and "__MACOSX" not in i.filename
+             and not i.filename.rsplit("/", 1)[-1].startswith(".") and i.filename.lower().rsplit(".", 1)[-1] in EXT_DATOS]
+    if len(datos) != 1:
+        raise ValueError(f"el ZIP tiene {len(datos)} archivos de datos; subí un ZIP con un solo archivo "
+                         f"(o descomprimilo y subí los archivos por separado)")
+    return z, datos[0]
+
+
+def nombre_interno(contenido: bytes, nombre: str) -> str:
+    """Nombre del archivo de datos: el mismo, o el que viene dentro del ZIP."""
+    if not es_zip(nombre):
+        return nombre
+    try:
+        return miembro_zip(contenido)[1].filename
+    except (ValueError, zipfile.BadZipFile):
+        return nombre
+
+
+def desempaquetar(contenido: bytes, nombre: str) -> tuple[bytes, str]:
+    """Contenido y nombre del archivo de datos (descomprimido si venía en un ZIP). Para CSV grandes conviene
+    `tabla_desde_archivo`, que lee el ZIP sin descomprimirlo entero en memoria."""
+    if not es_zip(nombre):
+        return contenido, nombre
+    z, info = miembro_zip(contenido)
+    return z.read(info), info.filename
+
+
+def leer_csv_zip(z: zipfile.ZipFile, info: zipfile.ZipInfo) -> pd.DataFrame:
+    """CSV dentro de un ZIP: el separador sale de una muestra y el lector en C descomprime sobre la marcha."""
+    with z.open(info) as f:
+        sep = separador_csv(f.read(65536))
+    for cod in ("utf-8-sig", "latin-1"):
+        try:
+            with z.open(info) as f:
+                return pd.read_csv(f, dtype=str, sep=sep, engine="c", encoding=cod)
+        except UnicodeDecodeError:
+            continue
+    raise ValueError("no se pudo decodificar el CSV")
 
 
 def _fila_encabezado(crudo: pd.DataFrame, max_filas: int = 15) -> int:
@@ -123,6 +177,11 @@ def tabla_desde_archivo(contenido: bytes, nombre: str, spec: Optional[Especifica
     TXT delimitado con un solo tipo de registro: lectura directa con pandas (rápida para archivos
     de millones de líneas); la validación campo a campo queda para la pestaña «Validar archivo».
     """
+    if es_zip(nombre):
+        z, info = miembro_zip(contenido)
+        if info.filename.lower().endswith(".csv"):
+            return leer_csv_zip(z, info)
+        return tabla_desde_archivo(z.read(info), info.filename, spec, tipo_registro, hoja)
     ext = nombre.lower().rsplit(".", 1)[-1]
     if ext in ("xlsx", "xls", "xlsm"):
         return leer_excel(contenido, hoja)
@@ -340,8 +399,16 @@ def detectar_especificacion(contenido: bytes, nombre: str, specs: dict) -> Detec
 
     Confianza = proporción de registros leídos sin errores de estructura ni de campo.
     """
+    if es_zip(nombre):
+        try:
+            interno = nombre_interno(contenido, nombre)
+            if interno.lower().endswith((".csv", ".xlsx", ".xls", ".xlsm")):
+                return Deteccion(None, None, None, 1.0, "tabla (CSV/Excel): no necesita especificación")
+            contenido, nombre = desempaquetar(contenido, nombre)
+        except (ValueError, zipfile.BadZipFile) as e:
+            return Deteccion(None, None, None, 0.0, str(e))
     ext = nombre.lower().rsplit(".", 1)[-1]
-    if ext in ("csv", "xlsx", "xls"):
+    if ext in ("csv", "xlsx", "xls", "xlsm"):
         return Deteccion(None, None, None, 1.0, "tabla (CSV/Excel): no necesita especificación")
     mejor = Deteccion(None, None, None, 0.0, "ninguna especificación de la biblioteca lee este archivo")
     for n, spec in specs.items():

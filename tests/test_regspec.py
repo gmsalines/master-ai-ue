@@ -925,6 +925,38 @@ def test_llave_ia_compuesta_se_reduce_y_se_corrige_con_el_error():
     assert "rechazó" in prov2.recibidos[1][-1]["content"] and "0%" in prov2.recibidos[1][-1]["content"]
 
 
+def test_zip_con_un_archivo_se_lee_sin_descomprimir_entero():
+    """Archivos grandes (caso real 3: CSV de 549 MB, ZIP de 133 MB): se sube el ZIP y se lee sobre la marcha."""
+    import io
+    import zipfile
+
+    import pandas as pd
+    import pytest
+    from regspec.cruce import desempaquetar, detectar_especificacion, nombre_interno, tabla_desde_archivo
+
+    def zipear(archivos: dict) -> bytes:
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            for n, c in archivos.items():
+                z.writestr(n, c)
+        return buf.getvalue()
+    csv = "doc;deb;cred\n00000216100;998,16;550,0\n00000393223;592,97;600,0\n".encode("utf-8")
+    zc = zipear({"carpeta/plantilla.csv": csv, "__MACOSX/._plantilla.csv": b"x"})
+    assert nombre_interno(zc, "datos.zip") == "carpeta/plantilla.csv"
+    df = tabla_desde_archivo(zc, "datos.zip")
+    assert list(df.columns) == ["doc", "deb", "cred"] and df["doc"].tolist() == ["00000216100", "00000393223"]
+    assert detectar_especificacion(zc, "datos.zip", {}).confianza == 1.0
+    xl = io.BytesIO()
+    pd.DataFrame({"Número do Declarado": ["216100"], "Total de Debitos": ["998,16"]}).to_excel(xl, index=False)
+    zx = zipear({"control.xlsx": xl.getvalue()})
+    assert desempaquetar(zx, "c.zip")[1] == "control.xlsx"
+    assert tabla_desde_archivo(zx, "c.zip")["Número do Declarado"].tolist() == ["216100"]
+    varios = zipear({"a.csv": csv, "b.csv": csv})
+    with pytest.raises(ValueError, match="2 archivos"):
+        tabla_desde_archivo(varios, "varios.zip")
+    assert detectar_especificacion(varios, "varios.zip", {}).confianza == 0.0
+
+
 def test_llave_ia_sin_muestras_envia_solo_nombres():
     import pandas as pd
     from regspec.cruce import consultar_llave_ia

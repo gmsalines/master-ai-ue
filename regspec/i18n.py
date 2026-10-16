@@ -381,6 +381,7 @@ PT: dict[str, str] = {
     "Sin condición (solo agrupar)": "Sem condição (só agrupar)", "Un umbral para todas las filas": "Um limite para todas as linhas",
     "Umbral según el valor de una columna": "Limite conforme o valor de uma coluna",
     "Nombre de la columna calculada": "Nome da coluna calculada",
+    " · dentro de {0}": " · dentro de {0}",
     "(ninguna columna válida)": "(nenhuma coluna válida)",
     " Necesitó {0} intentos: el primero no pasó la validación y se le devolvió el resultado.": " Precisou de {0} tentativas: a primeira não passou na validação e o resultado foi devolvido.",
     "🤖 La IA propuso {0}. El código la validó con los datos y la simplificó a la menor combinación de esas columnas que coincide entre los grupos: {1}.": "🤖 A IA propôs {0}. O código a validou com os dados e a simplificou para a menor combinação dessas colunas que coincide entre os grupos: {1}.",

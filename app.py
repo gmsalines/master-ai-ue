@@ -604,9 +604,15 @@ with tc:
         return tabla_desde_archivo(_contenido, nombre, spec, tipo, hoja)
 
     @st.cache_resource(show_spinner=False, max_entries=16)
-    def hojas_cacheado(firma: tuple, _contenido: bytes):
-        from regspec.cruce import hoja_por_defecto, hojas_excel
-        return hojas_excel(_contenido), hoja_por_defecto(_contenido)
+    def hojas_cacheado(firma: tuple, _contenido: bytes, nombre: str = ""):
+        from regspec.cruce import desempaquetar, hoja_por_defecto, hojas_excel
+        contenido, _n = desempaquetar(_contenido, nombre)  # un Excel dentro de un ZIP
+        return hojas_excel(contenido), hoja_por_defecto(contenido)
+
+    @st.cache_resource(show_spinner=False, max_entries=64)
+    def nombre_interno_cacheado(firma: tuple, _contenido: bytes, nombre: str) -> str:
+        from regspec.cruce import nombre_interno
+        return nombre_interno(_contenido, nombre)
 
     def columnas_distintas(a: pd.DataFrame, b: pd.DataFrame) -> bool:
         """True si dos tablas comparten menos de la mitad de sus columnas (no son el mismo tipo de archivo)."""
@@ -676,16 +682,21 @@ with tc:
             k = f"{lado}{i}"
             det = detectar_cacheado(firma_de(f), f.getvalue(), f.name, tuple(biblioteca), biblioteca)
             spec_sel, tipo, hoja = det.spec, det.tipo_registro, None
-            if f.name.lower().endswith((".xlsx", ".xls", ".xlsm")):
-                hojas, por_defecto = hojas_cacheado(firma_de(f), f.getvalue())
+            nom = nombre_interno_cacheado(firma_de(f), f.getvalue(), f.name)  # el de adentro, si es un ZIP
+            en_zip = _(" · dentro de {0}").format(f.name) if nom != f.name else ""
+            if f.name.lower().endswith(".zip") and det.confianza == 0 and det.detalle.startswith("el ZIP"):
+                st.error(_("No se pudo leer {0}: {1}").format(f.name, _(det.detalle)))
+                return None
+            if nom.lower().endswith((".xlsx", ".xls", ".xlsm")):
+                hojas, por_defecto = hojas_cacheado(firma_de(f), f.getvalue(), f.name)
                 if len(hojas) > 1:
                     hoja_ini = hoja_def if hoja_def in hojas else por_defecto
                     hoja = st.selectbox(_("Hoja"), hojas, index=hojas.index(hoja_ini), key=f"hoja_{k}_{V}",
                                         help=_("Se elige sola la hoja con más datos; la fila de encabezado también se detecta."))
                 else:
-                    st.caption(_("Tabla (Excel)"))
-            elif f.name.lower().endswith(".csv"):
-                st.caption(_("Tabla (CSV)"))
+                    st.caption(_("Tabla (Excel)") + en_zip)
+            elif nom.lower().endswith(".csv"):
+                st.caption(_("Tabla (CSV)") + en_zip)
             elif det.spec is not None and det.confianza >= 0.9:
                 st.success(_('Formato reconocido: **{0}** · {1}').format(det.nombre_spec, _(det.detalle)))
                 with st.expander(_("Cambiar formato o tipo de registro")):
@@ -942,7 +953,8 @@ with tc:
         """Lectura sin interfaz (para la sugerencia de llaves); None si el formato no se reconoce."""
         try:
             det = detectar_cacheado(firma_de(f), f.getvalue(), f.name, tuple(biblioteca), biblioteca)
-            if not f.name.lower().endswith((".csv", ".xlsx", ".xls", ".xlsm")) and (det.spec is None or det.confianza < 0.9):
+            nom = nombre_interno_cacheado(firma_de(f), f.getvalue(), f.name)
+            if not nom.lower().endswith((".csv", ".xlsx", ".xls", ".xlsm")) and (det.spec is None or det.confianza < 0.9):
                 return None
             return tabla_cacheada(firma_de(f), f.getvalue(), f.name, det.spec.model_dump_json() if det.spec is not None else None,
                                   det.tipo_registro, None)
@@ -1148,7 +1160,7 @@ with tc:
             c_nom, c_modo = st.columns([1, 2])
             gcfg = cfg.grupos[gi] if cfg is not None and gi < len(cfg.grupos) else None
             nombre_g = c_nom.text_input(_("Nombre del grupo"), gcfg.nombre if gcfg else _("Grupo {0}").format(gi + 1), key=f"gnom_{gi}_{V}_{ss.idioma}")
-            archivos = st.file_uploader(_('Archivos de «{0}» (uno o varios)').format(nombre_g), type=["csv", "xlsx", "xls", "txt", "xml", "dat"],
+            archivos = st.file_uploader(_('Archivos de «{0}» (uno o varios)').format(nombre_g), type=["csv", "xlsx", "xls", "txt", "xml", "dat", "zip"],
                                         accept_multiple_files=True, key=f"gfiles_{gi}_{ss.carga_n}")
             # por defecto: si los archivos del grupo tienen columnas distintas (p. ej. retenciones + padrón), base + referencia
             tablas_g = [d for g_, _f, d in leidas if g_ == gi]

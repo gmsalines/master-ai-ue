@@ -1,6 +1,8 @@
-# Compilador neuro-simbólico de especificaciones regulatorias y conciliación de archivos
+# Conciliación de archivos heterogéneos asistida por modelos de lenguaje
 
-*Estado al 1 de octubre de 2026. Rama `siguiente-paso` del repositorio `gmsalines/master-ai-ue` (al día con la carpeta de Gabi). App publicada en https://conciliacion-tfm.streamlit.app/.*
+Código del Trabajo Fin de Máster «Diseño e implementación de un sistema de conciliación de archivos heterogéneos asistido por modelos de lenguaje, con memoria de configuración y aprendizaje por uso» (Máster en Inteligencia Artificial Aplicada, Universidad Europea, 2026). Las instrucciones para reproducir cada resultado de la memoria están en la sección «Protocolo de evaluación» y en el Anexo A de la memoria.
+
+*Versión publicada: rama `siguiente-paso` del repositorio `gmsalines/master-ai-ue`, 109 pruebas automatizadas. App publicada en https://conciliacion-tfm.streamlit.app/.*
 
 El sistema tiene dos flujos:
 
@@ -73,7 +75,7 @@ biblioteca/         formatos reales cargados a mano (sin datos): se reconocen so
 ejemplos/           CSV para generar un informe; par sistema.csv / presentado.txt; ejemplos/grupos/ para la conciliación por grupos
 resultados/         salidas de las evaluaciones (detalle.csv y resumen.md por corrida; no se versiona)
 docs/               notas y migraciones SQL
-tests/              97 tests
+tests/              109 pruebas automatizadas
 app.py              app en Streamlit
 ```
 
@@ -82,7 +84,7 @@ app.py              app en Streamlit
 ```bash
 python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-python -m pytest                                      # 97 tests
+python -m pytest                                      # 109 pruebas
 ```
 
 La clave del proveedor va en un archivo `.env` en la raíz, que no se versiona. En Streamlit Cloud va en *Secrets* (ver más abajo).
@@ -184,7 +186,7 @@ python -m regspec.evaluacion.informe
 
 **Costo y límites.** Cada llamada consume unos 5.000 tokens de entrada más la especificación de salida, y una extracción típica usa entre 1 y 4 llamadas (hasta unos 30.000 tokens cuando el bucle agota las iteraciones, como en m4). Con el plan gratuito de Groq conviene repartir el banco en varios días; la caché evita repetir lo ya hecho. Las filas que fallan por cupo se descartan, no cuentan como respuestas del modelo.
 
-**Condiciones del compilador (ablación):**
+**Condiciones del compilador:**
 
 | Condición | Descripción |
 |---|---|
@@ -213,7 +215,7 @@ python -m regspec.evaluacion.informe
 | Exp. | Qué mide | Carpeta |
 |---|---|---|
 | E1 | Compilador de manuales | `20260930_linea_base_e1`; gpt-oss-20b: `20261001_e1_gptoss20b_m1m2` y `20260930_e1_gptoss20b` (m3–m5); gpt-oss-120b: `20260930_e1_gptoss120b` (m1–m2) y `20260930_e1_gptoss120b_m3m5`; tabla en `e1_consolidado.md` |
-| E2 | Motor de conciliación y ablación | `eval_conciliacion` (semilla 1000); línea base v1 en `eval_conciliacion_v1_linea_base` |
+| E2 | Motor de conciliación, con y sin cada tipo de coincidencia | `eval_conciliacion` (semilla 1000); línea base v1 en `eval_conciliacion_v1_linea_base` |
 | E3 | Sugerencia de llave por código | `eval_conciliacion` |
 | E3b | Sugerencia de llave con LLM | `eval_conciliacion_llm` |
 | E4 | Memoria de configuración | `eval_conciliacion` |
@@ -421,7 +423,7 @@ Sin esas claves, todo funciona en modo local (sin login) y la memoria se guarda 
 ## Pendientes
 
 - Opcional: segunda repetición de E1 con `--sin-cache`.
-- Ablaciones del compilador (`llm_bucle_sin_evidencia`, `llm_bucle_sin_ejecucion`) con los cinco manuales.
+- Variantes del compilador sin cada componente (`llm_bucle_sin_evidencia`, `llm_bucle_sin_ejecucion`) con los cinco manuales.
 - Caso real anonimizado para medir el tiempo frente al proceso manual.
 - Probar a mano en la app el botón de llave con IA, «Describir el cruce con texto» y la sugerencia del modelo de llave con archivos que traigan numeración de filas.
 

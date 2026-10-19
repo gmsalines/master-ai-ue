@@ -1042,8 +1042,8 @@ with tc:
         from regspec.instrucciones import configurar_desde_texto
         res_txt = ss.get("texto_res")
         with st.expander(_("✍️ Describir el cruce con texto (asistido por IA)"), expanded=res_txt is not None):
-            st.caption(_("Escribí qué querés cruzar con tus palabras, por ejemplo: «cruzá por CUIT, quedate solo con las leyendas "
-                         "SIRTAC y 680/2020, compará el monto retenido con tolerancia de 1 centavo». La IA propone la "
+            st.caption(_("Escribí qué querés cruzar con tus palabras, por ejemplo: «cruzá por número de documento, quedate solo con las "
+                         "operaciones de tipo A y B, compará el importe con tolerancia de 1 centavo». La IA propone la "
                          "configuración, el código la valida contra los datos y se carga abajo para que la revises antes de cruzar. "
                          "A la IA se le envían los nombres de las columnas y unos pocos valores de ejemplo, no los archivos."))
             texto_u = st.text_area(_("Instrucción"), key=f"texto_cruce_{ss.carga_n}", height=90,

@@ -25,7 +25,6 @@ Uso:
 from __future__ import annotations
 
 import argparse
-import json
 import random
 import tempfile
 import time
@@ -287,7 +286,7 @@ def e3_llave_codigo(cs: list[Caso]) -> pd.DataFrame:
         t0 = time.perf_counter()
         s = sugerir_llaves([c.a, c.b])
         ms = (time.perf_counter() - t0) * 1000
-        (ca, tra, _), (cb, trb, cob) = s[0], s[1]
+        (ca, _, _), (cb, trb, cob) = s[0], s[1]
         filas.append({"caso": c.id, "escenario": c.escenario, "variante": c.variante, "dificultad": c.dificultad,
                       "llave_a_sugerida": ca, "llave_b_sugerida": cb, "normalizacion": trb, "cobertura": round(cob, 3),
                       "llave_clara": cob >= SOLIDEZ_MINIMA, "correcta": _misma_llave(c, ca, cb, trb),
@@ -452,7 +451,7 @@ def _cruzar_config(c: Caso, cfg) -> dict:
     comp = [tuple(x) for x in cfg.comparaciones]
     r = cruzar_grupos(grupos, comp, Decimal(cfg.tolerancia))
     m = r.matriz
-    en_a, en_b = f"en {cfg.grupos[0].nombre}", f"en {cfg.grupos[1].nombre}"
+    en_a = f"en {cfg.grupos[0].nombre}"
     est = np.where(m["en todos"] & m["con diferencias"], "diferencias",
                    np.where(m["en todos"], "iguales", np.where(m[en_a], "solo_a", "solo_b")))
     return metricas_estados(c.verdad, dict(zip(m["llave"], est)))

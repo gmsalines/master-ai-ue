@@ -18,7 +18,6 @@ import csv
 import json
 import statistics
 import time
-from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 

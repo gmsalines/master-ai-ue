@@ -1,6 +1,6 @@
 # Conciliación de archivos heterogéneos asistida por modelos de lenguaje
 
-Código del Trabajo Fin de Máster «Diseño e implementación de un sistema de conciliación de archivos heterogéneos asistido por modelos de lenguaje, con memoria de configuración y aprendizaje por uso» (Máster en Inteligencia Artificial Aplicada, Universidad Europea, 2026). Las instrucciones para reproducir cada resultado de la memoria están en la sección «Protocolo de evaluación» y en el Anexo A de la memoria.
+Código del Trabajo Fin de Máster «Diseño e implementación de un sistema de conciliación de archivos heterogéneos asistido por modelos de lenguaje, con memoria de configuración y aprendizaje por uso» (Máster de Formación Permanente en Inteligencia Artificial Aplicada, Universidad Europea de Madrid, 2026). Las instrucciones para reproducir cada resultado de la memoria están en la sección «Protocolo de evaluación» y en el Anexo A de la memoria.
 
 *Versión publicada: rama `siguiente-paso` del repositorio `gmsalines/master-ai-ue`, 109 pruebas automatizadas. App publicada en https://conciliacion-tfm.streamlit.app/.*
 
@@ -71,7 +71,7 @@ regspec/
   evaluacion/       mutaciones, métricas, banco del compilador (ejecutar.py), banco de conciliación (conciliacion.py), modelo de llave (llave_ml.py), informe.py
 manuales/           5 manuales ficticios de dificultad creciente
 gold/               especificaciones de referencia escritas a mano (corpus de evaluación)
-biblioteca/         formatos reales cargados a mano (sin datos): se reconocen solos al subir un archivo
+biblioteca/         formatos cargados a mano a partir de manuales públicos (sin datos): se reconocen solos al subir un archivo
 ejemplos/           CSV para generar un informe; par sistema.csv / presentado.txt; ejemplos/grupos/ para la conciliación por grupos
 resultados/         salidas de las evaluaciones (detalle.csv y resumen.md por corrida; no se versiona)
 docs/               notas y migraciones SQL
@@ -83,7 +83,8 @@ app.py              app en Streamlit
 
 ```bash
 python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r requirements.txt                       # versiones mínimas
+pip install -r requirements-exactas.txt               # o las versiones exactas de la memoria (Python 3.12 o 3.13)
 python -m pytest                                      # 109 pruebas
 ```
 
@@ -169,13 +170,14 @@ Los cinco manuales son **ficticios**: no reproducen ningún organismo real.
 
 ```bash
 # Compilador (E1)
-python -m regspec evaluar --solo-sin-ia                              # referencia + línea base
-python -m regspec evaluar --proveedor groq --modelo openai/gpt-oss-20b --condiciones llm_1_intento,llm_bucle --repeticiones 1
-python -m regspec evaluar --proveedor groq --manuales m1_retenciones,m2_cuentas --condiciones llm_1_intento,llm_bucle
+python -m regspec evaluar --solo-sin-ia                              # referencia + línea base sin IA
+python -m regspec evaluar --proveedor groq --modelo openai/gpt-oss-20b --condiciones llm_1_intento,llm_bucle --repeticiones 3
+python -m regspec evaluar --proveedor groq --modelo openai/gpt-oss-120b --condiciones llm_1_intento,llm_bucle --repeticiones 3
 
-# Conciliación (E2–E5, E3b con --llm, E6 con --solo-texto)
-python -m regspec.evaluacion.conciliacion -o resultados/eval_conciliacion
-python -m regspec.evaluacion.conciliacion -o resultados/eval_texto_nuevos --solo-texto --semilla-texto 3000 --llm groq --modelo openai/gpt-oss-20b
+# Conciliación (E2–E5 sin LLM; E3b con --llm; E6 con --solo-texto)
+python -m regspec.evaluacion.conciliacion -o resultados/eval_conciliacion          # unos 2 minutos; --semilla 7: casos de desarrollo
+python -m regspec.evaluacion.conciliacion --llm groq --modelo openai/gpt-oss-20b
+python -m regspec.evaluacion.conciliacion --solo-texto --semilla-texto 3000 --llm groq --modelo openai/gpt-oss-20b
 
 # Modelo de llave aprendido (E7, sin LLM, unos 3 minutos; también regenera regspec/modelos/)
 python -m regspec.evaluacion.llave_ml -o resultados/eval_llave_ml
@@ -210,45 +212,29 @@ python -m regspec.evaluacion.informe
   - Una detección solo cuenta si la especificación acepta el archivo válido del que deriva la mutación, así que rechazar todo no suma.
 - *Proceso*: especificación válida (sí/no), iteraciones, tokens, latencia.
 
-**Dónde están los resultados** (`resultados/`):
-
-| Exp. | Qué mide | Carpeta |
-|---|---|---|
-| E1 | Compilador de manuales | `20260930_linea_base_e1`; gpt-oss-20b: `20261001_e1_gptoss20b_m1m2` y `20260930_e1_gptoss20b` (m3–m5); gpt-oss-120b: `20260930_e1_gptoss120b` (m1–m2) y `20260930_e1_gptoss120b_m3m5`; tabla en `e1_consolidado.md` |
-| E2 | Motor de conciliación, con y sin cada tipo de coincidencia | `eval_conciliacion` (semilla 1000); línea base v1 en `eval_conciliacion_v1_linea_base` |
-| E3 | Sugerencia de llave por código | `eval_conciliacion` |
-| E3b | Sugerencia de llave con LLM | `eval_conciliacion_llm` |
-| E4 | Memoria de configuración | `eval_conciliacion` |
-| E5 | Rendimiento | `eval_conciliacion` |
-| E6 | Texto → configuración | `eval_texto` (semilla 2000, diseño), `eval_texto_nuevos` y `eval_texto_nuevos_rep2` (semilla 3000); tabla en `e6_consolidado.md` |
-| E7 | Modelo de llave aprendido y aprendizaje por uso | `eval_llave_ml` |
-
-`20260927_194002` y `20260930_e1_parcial` son corridas exploratorias o interrumpidas por cupo; no se usan en la memoria.
+**Dónde quedan los resultados.** Cada comando escribe sus salidas (`detalle.csv` y `resumen.md`) en `resultados/`, que no se versiona. La versión del código de cada resultado de la memoria es la del Anexo A: E2–E5 y E7, commit `2f20f91`; E1, `66f649d`; E3b y E6, el banco de `3a4fc30`. Los experimentos sin LLM (E2–E5, E7 y la línea base de E1) se repitieron también con la versión publicada y dieron los mismos valores (E5, con tiempos del mismo orden).
 
 ## Resultados
 
-### E1 · Compilador de manuales (n = 1 por modelo)
+### E1 · Compilador de manuales (tres repeticiones por modelo)
 
-Exactitud balanceada por manual (✓ = especificación válida según el verificador, ✗ = no válida; entre paréntesis, iteraciones del bucle):
+Especificaciones válidas de 3 repeticiones · exactitud balanceada media (entre paréntesis, iteraciones medias del bucle). El parser es determinista.
 
 | manual | parser sin IA | gpt-oss-20b · 1 intento | gpt-oss-20b · sistema completo | gpt-oss-120b · 1 intento | gpt-oss-120b · sistema completo |
 |---|---|---|---|---|---|
-| m1 | 0,92 ✓ | 1,00 ✓ | 1,00 ✓ (1) | 0,98 ✓ | 0,98 ✓ (1) |
-| m2 | 0,10 ✓ | 0,87 ✗ | 0,88 ✓ (2) | 0,98 ✗ | 0,98 ✓ (2) |
-| m3 | 0,00 ✗ | 0,00 ✗ | 0,93 ✓ (2) | 0,00 ✗ | 0,00 ✗ (2) |
-| m4 | 0,00 ✗ | 0,00 ✗ | 0,00 ✗ (3) | 0,00 ✗ | 0,00 ✗ (4) |
-| m5 | 0,89 ✗ | 1,00 ✗ | 1,00 ✓ (2) | 1,00 ✗ | 1,00 ✗ (2) |
-| **especificaciones válidas** | 2 de 5 | 1 de 5 | **4 de 5** | 1 de 5 | 2 de 5 |
-| **media** | 0,38 | 0,57 | **0,76** | 0,59 | 0,59 |
-| **tokens medios** | – | 7.277 | 12.547 | 7.299 | 13.072 |
+| m1 · tablas limpias | válida · 0,92 | 3 de 3 · 1,00 | 3 de 3 · 1,00 (1,0) | 2 de 3 · 1,00 | 3 de 3 · 1,00 (1,3) |
+| m2 · COBOL y notas al pie | válida · 0,10 | 0 de 3 · 0,58 | 3 de 3 · 0,88 (2,0) | 0 de 3 · 0,63 | 2 de 3 · 0,65 (2,7) |
+| m3 · XML en prosa | no válida · 0,00 | 0 de 3 · 0,00 | 2 de 3 · 0,61 (3,3) | 2 de 3 · 0,61 | 2 de 3 · 0,61 (1,3) |
+| m4 · texto de PDF | no válida · 0,00 | 0 de 3 · 0,00 | 0 de 3 · 0,00 (3,0) | 0 de 3 · 0,00 | 0 de 3 · 0,00 (3,3) |
+| m5 · manual con errata | no válida · 0,89 | 0 de 3 · 0,67 | 1 de 3 · 1,00 (3,3) | 0 de 3 · 0,33 | 0 de 3 · 1,00 (2,7) |
+| **total / media** | 2 de 5 · 0,38 | 3 de 15 · 0,45 | **9 de 15 · 0,70** | 4 de 15 · 0,52 | **7 de 15 · 0,65** |
+| **tokens medios** | – | 7.362 | 12.331 | 7.398 | 13.714 |
 
-- Con **un solo modelo** (gpt-oss-20b) en los cinco manuales, el sistema completo obtiene 4 especificaciones válidas de 5, frente a 1 de 5 con un solo intento y 2 de 5 con el parser sin IA.
-- Con gpt-oss-120b el bucle se estancó en m3, m4 y m5 («la corrección no produjo cambios»): el modelo más grande corrige peor sus propios errores en estos manuales.
-- m4 (texto de PDF) falló con ambos modelos, pero el sistema **no entregó una especificación incorrecta como válida**: avisó del fallo.
-- En m5 el intento único se comporta bien (1,00) pero arrastra la errata del manual; el verificador la bloquea y el bucle la corrige.
-- En m2 el sistema completo extrajo 10 (120b) y 11 (20b) de 12 reglas y el verificador la dio por válida: controla lo extraído, no detecta reglas que faltan. Con 20b, además, la especificidad es 0,8.
-- **Hallazgo:** el verificador bloquea siempre las especificaciones defectuosas, pero que la autocorrección funcione depende del modelo.
-- Tabla generada desde los `detalle.csv` en `resultados/e1_consolidado.md`; se descartan las filas que fallaron por cupo.
+- Con gpt-oss-20b, el sistema completo obtiene 9 especificaciones válidas de 15, frente a 3 de 15 con un solo intento y 2 de 5 con el parser sin IA; con gpt-oss-120b, 7 de 15 frente a 4 de 15.
+- La diferencia entre los dos modelos (9 frente a 7) está dentro de la variación entre repeticiones (3, 4 y 2 manuales válidos con gpt-oss-20b): no permite concluir que uno corrija mejor que el otro.
+- Por manual, el sistema completo nunca obtuvo menos especificaciones válidas que un solo intento, con ninguno de los dos modelos; con cinco manuales, la mejora no es significativa (prueba de signos, p = 0,25 bilateral).
+- m4 (texto de PDF) falló con ambos modelos, pero el sistema **no entregó una especificación incorrecta como válida**: informó del fallo. En las 60 ejecuciones con LLM, ninguna especificación dada por válida tuvo una exactitud balanceada inferior a 0,88.
+- El verificador controla lo extraído, pero no detecta reglas omitidas: en m2 dio por válidas especificaciones con 10 u 11 de las 12 reglas.
 
 ### E2 · Motor de conciliación
 
@@ -277,7 +263,7 @@ El modelo no inventa columnas, pero sí elige columnas equivocadas. La validaci�
 ### E4 · Memoria de configuración
 
 - **Proceso estable (30 ejecuciones):** la confianza pasa del 95 % en la ejecución 22, a partir de la cual se aplica sola. 23 intervenciones en total, frente a 90 configurando cada vez desde cero.
-- **Proceso con cambios (25 ejecuciones:** una exclusión nueva en la 8 y un cambio de columna en la 16): 3 intervenciones en la primera ejecución y 1,17 de media en las siguientes. La corrección baja la confianza y el cambio de estructura reinicia la memoria, así que en este escenario nunca se llega a la aplicación automática.
+- **Proceso con cambios** (25 ejecuciones: una exclusión nueva en la 8 y un cambio de columna en la 16): 3 intervenciones en la primera ejecución y 1,17 de media en las siguientes. La corrección baja la confianza y el cambio de estructura reinicia la memoria, así que en este escenario nunca se llega a la aplicación automática.
 
 ### E5 · Rendimiento
 
@@ -290,16 +276,16 @@ El modelo no inventa columnas, pero sí elige columnas equivocadas. La validaci�
 
 ### E6 · Texto → configuración
 
-| conjunto | instrucciones | config. completa sin validar | con validación | explícitas validadas | semánticas validadas | exactitud del cruce |
+| conjunto | instrucciones | config. completa sin validar | con validación | explícitas validadas | lenguaje natural validadas | exactitud del cruce |
 |---|---|---|---|---|---|---|
-| semilla 2000 (diseño) | 24 | 50,0 % | 91,7 % | 100,0 % | 83,3 % | 99,8 % |
-| semilla 3000, repetición 1 | 23 | 65,2 % | 87,0 % | 100,0 % | 75,0 % | 95,6 % |
-| semilla 3000, repetición 2 | 24 | 45,8 % | 75,0 % | 91,7 % | 58,3 % | 95,4 % |
-| **semilla 3000, ambas** | **47** | **55,3 %** | **80,9 %** | **95,7 %** | **66,7 %** | **95,5 %** |
+| datos de diseño (semilla 2000) | 24 | 50,0 % | 91,7 % | 100,0 % | 83,3 % | 99,8 % |
+| datos nuevos (semilla 3000), corrida 1 | 23 | 65,2 % | 87,0 % | 100,0 % | 75,0 % | 95,6 % |
+| datos nuevos (semilla 3000), corrida 2 | 24 | 45,8 % | 75,0 % | 91,7 % | 58,3 % | 95,4 % |
+| **datos nuevos, ambas corridas** | **47** | **55,3 %** | **80,9 %** | **95,7 %** | **66,7 %** | **95,5 %** |
 
-- Las reglas de validación se diseñaron sobre la semilla 2000; la 3000 (instrucciones nuevas) se corrió dos veces con gpt-oss-20b. En la repetición 1 se excluyó una instrucción por cupo.
-- La validación mejora la configuración completa en todas las corridas (de 55 % a 81 % en las instrucciones nuevas). La diferencia entre repeticiones refleja la variabilidad del modelo.
-- Las instrucciones explícitas quedan casi siempre bien (95,7 %); las semánticas, que describen lo que se quiere sin nombrar las columnas, son el punto débil (66,7 %).
+- Las reglas de validación se diseñaron con los datos de diseño; los datos nuevos usan las mismas plantillas de instrucción (cambian los datos, no la redacción) y se corrieron dos veces con gpt-oss-20b. En la corrida 1 se excluyó una instrucción por cupo.
+- La validación mejora la configuración completa en todas las corridas (del 55,3 % al 80,9 % con datos nuevos). La diferencia entre corridas refleja la variabilidad del modelo con instrucciones idénticas.
+- Las instrucciones explícitas quedan casi siempre bien (95,7 %); las de lenguaje natural, que describen un filtro por su significado sin nombrar la columna, son el punto débil (66,7 %).
 - Tabla en `resultados/e6_consolidado.md`.
 
 ### E7 · Modelo de llave aprendido y aprendizaje por uso
@@ -308,14 +294,14 @@ Sin LLM ni tokens. Caso difícil: los archivos traen una **numeración de filas*
 
 **E7a · Generalización** (validación cruzada dejando un escenario fuera; prueba: los 24 casos de E3):
 
-| archivos | heurística | modelo entrenado sin señuelos | modelo entrenado con señuelos |
+| archivos | heurística | modelo entrenado sin numeración de filas | modelo entrenado con numeración de filas |
 |---|---|---|---|
 | sin numeración de filas | 100 % | 100 % | 100 % |
 | con numeración de filas | **0 %** | 25 % | **100 %** |
 
 La heurística no solo falla: presenta la llave equivocada como **clara** (solidez 1,0), así que tampoco ofrece el respaldo con IA.
 
-**E7b · Aprendizaje por uso** (5 usuarios simulados × 20 ejecuciones; todos los archivos con numeración de filas y estructura variable; el modelo base se entrenó **sin** señuelos):
+**E7b · Aprendizaje por uso** (5 usuarios simulados × 20 ejecuciones; todos los archivos con numeración de filas y estructura variable; el modelo base se entrenó **sin** ejemplos de numeración de filas):
 
 | condición | acierto | correcciones del usuario (de 20) |
 |---|---|---|
@@ -327,7 +313,7 @@ La heurística no solo falla: presenta la llave equivocada como **clara** (solid
 - Basta **una corrección** para que el modelo aprenda el patrón: el peso de «parece numeración de filas» pasa de 0,00 a −3,42.
 - La memoria de configuración solo ayuda cuando se repite exactamente la misma estructura; el modelo generaliza a estructuras nuevas.
 - **No regresión:** tras el uso, el modelo de cada usuario sigue acertando los 24 casos de E3 (100 %).
-- Costo: unos 110 ms por sugerencia y unos 6 ms por reentrenamiento.
+- Tiempo: unos 110 ms por sugerencia y unos 6 ms por reentrenamiento.
 
 ## Decisiones y supuestos del DSL
 
@@ -358,7 +344,7 @@ La regla se guarda con el cruce y en la memoria de configuración. Con un milló
 
 - La llave se sugiere **por código, en conjunto para todos los archivos**: se prueban las columnas identificadoras del primer archivo (descartando importes, fechas y textos) y, para cada una, la columna de cada otro archivo con mayor contención de valores, con la misma normalización para todos (exacta o solo números). Un filtro previo por perfil de dígitos evita recorrer columnas que no pueden coincidir.
 - Puntaje de cada par: contención × f(unicidad), con f(u) = min(1, u / 0,5). Una llave es **clara** si su solidez llega a 0,5.
-- Si ninguna llave es clara, el botón de llave con IA (`sugerir_llave_ia`) envía al LLM los nombres de columna y 5 ejemplos por archivo. Lo que propone se valida: las columnas tienen que existir y la solidez tiene que llegar a 0,5. El umbral de 0,5 se ajustó a posteriori.
+- Si ninguna llave es clara, el botón de llave con IA (`sugerir_llaves_ia` en `grupos.py`) envía al LLM los nombres de columna y 5 valores de ejemplo por columna. Lo que propone se valida: las columnas tienen que existir y la solidez tiene que llegar a 0,5 (umbral fijado tras observar E3b). En la versión publicada la validación es por grupo, una llave compuesta se reduce a la menor combinación que valida igual y, si no valida, el modelo recibe el resultado y tiene un segundo intento.
 - Excel: se elige la hoja con más datos y se detecta la fila de encabezado (reportes con títulos arriba).
 - TXT delimitado de un solo tipo de registro: se lee con pandas; un padrón de ~4,9 millones de líneas (370 MB) se lee en ~8 s y el cruce completo (lookup contra el padrón + 3 grupos) tarda ~5 s. La validación campo a campo se hace en «Validar archivo».
 - La app acepta archivos de hasta 1 GB (`.streamlit/config.toml`).
@@ -420,21 +406,14 @@ espacio de trabajo (permisos por fila en la base):
 
 Sin esas claves, todo funciona en modo local (sin login) y la memoria se guarda en `cruces_guardados/memoria.json`.
 
-## Pendientes
-
-- Opcional: segunda repetición de E1 con `--sin-cache`.
-- Variantes del compilador sin cada componente (`llm_bucle_sin_evidencia`, `llm_bucle_sin_ejecucion`) con los cinco manuales.
-- Caso real anonimizado para medir el tiempo frente al proceso manual.
-- Probar a mano en la app el botón de llave con IA, «Describir el cruce con texto» y la sugerencia del modelo de llave con archivos que traigan numeración de filas.
-
 ## Limitaciones y líneas futuras
 
-- Resultados del compilador con una repetición por modelo (n = 1).
-- E7 usa un solo tipo de trampa (numeración de filas) y usuarios simulados que siempre corrigen bien; falta probar el modelo de llave con patrones variados y con usuarios reales.
-- Cuando el bucle no progresa, reintentar con otra temperatura u otro modelo.
-- Textos extraídos de PDF con maquetación compleja (m4).
+Detalle en los apartados 5.9 y 7 de la memoria. En resumen:
+
+- Pocos casos: banco sintético de 24 casos por lote de un único generador, cinco manuales ficticios sin conjunto reservado, tres casos reales de un período y un piloto con tres usuarias.
+- Experimentos con LLM con pocas repeticiones (tres por modelo en E1, una en E3b y dos corridas en E6); el umbral de solidez se fijó con los casos de E3b.
+- E7 usa un solo tipo de trampa (numeración de filas) y usuarios simulados que siempre corrigen bien.
+- Textos extraídos de PDF con maquetación compleja (m4), estructuras XML anidadas, registros jerárquicos y campos con signo.
 - Instrucciones en texto que describen el filtro por su significado y no por la columna.
-- Estructuras XML anidadas y registros jerárquicos (padre/hijo).
-- Campos con signo y formatos numéricos con separador explícito en ancho fijo.
-- Transmisión a los organismos (API o web service) y catálogo amplio de jurisdicciones.
-- Detección de inconsistencias del propio manual: el verificador ya las señala (m5); falta el caso de estudio.
+- Medir por separado cuánto aportan la cita de evidencia y la prueba con archivos de ejemplo (`llm_bucle_sin_evidencia`, `llm_bucle_sin_ejecucion`).
+- Cuando el bucle no progresa, reintentar con otra temperatura u otro modelo.

@@ -1,0 +1,13 @@
+# Versiones con las que se obtuvieron y verificaron los resultados de la memoria (Anexo A).
+# requirements.txt fija solo versiones mínimas; para reproducir exactamente:
+#   pip install -r requirements-exactas.txt
+pandas==3.0.*
+numpy==2.5.*
+scikit-learn==1.9.*
+pydantic==2.13.*
+lxml==6.1.*
+openpyxl==3.1.*
+pypdf==5.9.*
+streamlit==1.65.*
+supabase==2.32.*
+pytest==9.1.*

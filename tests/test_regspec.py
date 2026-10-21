@@ -401,7 +401,7 @@ def test_respaldo_por_cupo_sigue_con_otro_modelo():
     otra = ConRespaldo([Caido(), Guionado(['{}'])])
     try:
         otra.completar([{"role": "user", "content": "x"}])
-        assert False
+        pytest.fail("el error debía propagarse")
     except ErrorProveedor as e:
         assert not isinstance(e, CupoAgotado) and otra.cambios == []
     assert _duracion(960 * 60) == "16 h" and _duracion(75 * 60) == "1 h 15 min" and _duracion(9 * 60) == "9 min"
@@ -534,7 +534,6 @@ def test_parche_con_campos_por_nombre():
 def test_hibrido_codigo_primero_la_ia_solo_corrige():
     """m1: los registros 01 y 09 se leen por código (0 tokens); el 02 remite a una tabla de códigos y la IA
     solo devuelve la corrección; las reglas las extrae la IA."""
-    from regspec.base_sin_ia import extraer_base
     g = gold("m1_retenciones")
     esq = {k: v for k, v in g.items() if k not in ("tipos_registro", "reglas")}
     esq["tipos_registro"] = [{k: v for k, v in t.items() if k != "campos"} for t in g["tipos_registro"]]

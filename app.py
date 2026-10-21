@@ -1,4 +1,4 @@
-"""Demo interactiva: de la normativa al archivo validado.
+"""Aplicación web del TFM: conciliación de archivos heterogéneos asistida por modelos de lenguaje.
 
     streamlit run app.py
 """
@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import difflib
 import copy
-import io
 import json
 import os
 import re
@@ -587,10 +586,8 @@ with tc:
     from decimal import Decimal
 
     from regspec.cruce import (
-        biblioteca_de_especificaciones, cruzar, detectar_especificacion, llave_clara, sugerir_comparaciones,
-        sugerir_llave, sugerir_llave_ia, tabla_desde_archivo,
+        biblioteca_de_especificaciones, detectar_especificacion, tabla_desde_archivo,
     )
-    from regspec.llm.cache import ProveedorConCache
 
     biblioteca = {**biblioteca_de_especificaciones(BIBLIO, RAIZ / "biblioteca", RAIZ / "gold"), **formatos_del_usuario()}
 

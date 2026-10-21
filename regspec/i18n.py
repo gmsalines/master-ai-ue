@@ -96,7 +96,6 @@ PT: dict[str, str] = {
     "{0} Paso **{1}** ({2}, {3:.0f} s)": "{0} Etapa **{1}** ({2}, {3:.0f} s)",
     "sin IA": "sem IA",
     "desde caché, 0 tokens": "do cache, 0 tokens",
-    "{0} tokens": "{0} tokens",
     "Guardada en la biblioteca como '{0}': desde ahora el sistema reconoce este formato al cruzar archivos.":
         "Salva na biblioteca como '{0}': a partir de agora o sistema reconhece este formato ao cruzar arquivos.",
     "Resultado": "Resultado",

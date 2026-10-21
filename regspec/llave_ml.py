@@ -31,7 +31,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from .grupos import (_cobertura, _factor_unicidad, _muestra, _parece_llave, _perfil_digitos, _unicidad,
+from .grupos import (_factor_unicidad, _muestra, _parece_llave, _perfil_digitos, _unicidad,
                      puntaje_nombre, transformar_serie)
 
 TRANSFORMACIONES_ML = ("exacta", "solo_numeros")
